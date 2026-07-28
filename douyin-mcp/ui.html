@@ -255,17 +255,61 @@
   #playerClose:hover { border-color: var(--coral); color: var(--coral); }
   #playerLink { font-size: 11.5px; color: var(--text-dim); }
   #playerLink a { color: var(--cyan); }
+
+  #playerCard iframe {
+    display: block; border: 0; background: #000;
+    width: min(99vw, 960px); height: auto; aspect-ratio: 16 / 9;
+    max-width: 99vw; max-height: 95vh;
+    border-radius: var(--radius);
+  }
+  #playerCard iframe.hidden { display: none; }
+
+  .platform-badge {
+    font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 6px; border-radius: 4px; color: #0b0b0d;
+  }
+  .platform-badge.douyin { background: var(--cyan); }
+  .platform-badge.youtube { background: #ff4d4d; }
+
+  /* YouTube login modal — embeds noVNC so the user can drive a real,
+     interactive Google sign-in themselves (see youtube.py). */
+  #ytLoginOverlay {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(11,11,13,0.96);
+    display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px; text-align: center; padding: 24px;
+  }
+  #ytLoginOverlay.show { display: flex; }
+  #ytLoginOverlay h1 { font-size: 20px; margin: 0; }
+  #ytLoginOverlay p { color: var(--text-dim); font-size: 13px; max-width: 480px; margin: 0; }
+  #vncFrame {
+    width: min(94vw, 960px); height: min(75vh, 650px);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: #000;
+  }
+  #ytLoginClose {
+    background: transparent; border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 7px 14px; cursor: pointer;
+  }
+  #ytLoginClose:hover { border-color: var(--coral); color: var(--coral); }
 </style>
 </head>
 <body>
 
 <header>
   <div class="brand"><span class="dot"></span>Follows<small id="countLabel"></small></div>
+  <select id="platformFilter">
+    <option value="">All platforms</option>
+    <option value="douyin">Douyin</option>
+    <option value="youtube">YouTube</option>
+  </select>
   <label class="check"><input type="checkbox" id="unwatchedOnly" checked> Unwatched only</label>
   <label class="check"><input type="checkbox" id="showFiltered"> Show filtered (gym/drawing)</label>
   <span id="syncStatus"></span>
   <button id="backfillBtn" title="Fetch playable links for videos synced before in-page playback existed">Fix old links</button>
-  <button class="primary" id="syncBtn">Sync now</button>
+  <button class="primary" id="syncBtn">Sync Douyin</button>
+  <button id="ytLoginBtn">Login to YouTube</button>
+  <button id="ytSyncBtn">Sync YouTube</button>
 </header>
 
 <div class="layout">
@@ -290,6 +334,14 @@
   <p><span class="spinner-dot"></span> Waiting for scan…</p>
 </div>
 
+<div id="ytLoginOverlay">
+  <h1>Log in to YouTube</h1>
+  <p>This is a real, interactive browser window running inside the container — Google blocks automated logins, so drive it yourself: click in, sign in (including any 2FA/passkey step), and this closes automatically once it detects you're logged in.</p>
+  <iframe id="vncFrame" src="about:blank" title="YouTube login (VNC)"></iframe>
+  <p><span class="spinner-dot"></span> Waiting for login…</p>
+  <button id="ytLoginClose">Cancel</button>
+</div>
+
 <div id="busyOverlay">
   <div class="spinner-ring"></div>
   <p id="busyText">Syncing…</p>
@@ -299,6 +351,7 @@
   <div id="playerCard">
     <span id="speedBadge"></span>
     <video id="playerVideo" controls autoplay playsinline></video>
+    <iframe id="playerFrame" class="hidden" allow="autoplay; encrypted-media" allowfullscreen></iframe>
     <div id="playerFallback">Playback isn't available for this video (it was synced before we started saving playable links) — open it on Douyin instead.</div>
     <div id="playerMeta">
       <div>
@@ -324,6 +377,12 @@ const loginOverlay = document.getElementById('loginOverlay');
 const qrWrap = document.getElementById('qrWrap');
 const busyOverlay = document.getElementById('busyOverlay');
 const busyText = document.getElementById('busyText');
+const platformFilter = document.getElementById('platformFilter');
+const ytLoginBtn = document.getElementById('ytLoginBtn');
+const ytSyncBtn = document.getElementById('ytSyncBtn');
+const ytLoginOverlay = document.getElementById('ytLoginOverlay');
+const vncFrame = document.getElementById('vncFrame');
+const ytLoginClose = document.getElementById('ytLoginClose');
 
 function showBusy(text) {
   busyText.textContent = text;
@@ -335,6 +394,7 @@ function hideBusy() {
 const creatorList = document.getElementById('creatorList');
 const playerOverlay = document.getElementById('playerOverlay');
 const playerVideo = document.getElementById('playerVideo');
+const playerFrame = document.getElementById('playerFrame');
 const playerFallback = document.getElementById('playerFallback');
 const playerTitle = document.getElementById('playerTitle');
 const playerSourceLink = document.getElementById('playerSourceLink');
@@ -356,15 +416,30 @@ function escapeHtml(s) {
 }
 
 function openPlayer(v) {
-  playerVideo.classList.remove('hidden');
-  playerFallback.classList.remove('show');
-  playerVideo.style.aspectRatio = ''; // clear any real ratio set for the
-    // previous video so this one starts from the 9:16 CSS placeholder again
-  playerVideo.src = `/api/play/${v.id}`;
-  playerVideo.playbackRate = 1;
   playerTitle.textContent = v.title || '(untitled)';
   playerSourceLink.href = v.url;
   playerOverlay.classList.add('show');
+
+  if (v.platform === 'youtube') {
+    // YouTube videos play via the official embed iframe — no CDN proxying
+    // needed (unlike Douyin's play_url, which 403s without a Referer).
+    playerVideo.pause();
+    playerVideo.removeAttribute('src');
+    playerVideo.classList.add('hidden');
+    playerFallback.classList.remove('show');
+    playerFrame.classList.remove('hidden');
+    playerFrame.src = `https://www.youtube.com/embed/${v.id}?autoplay=1`;
+  } else {
+    playerFrame.classList.add('hidden');
+    playerFrame.src = 'about:blank';
+    playerVideo.classList.remove('hidden');
+    playerFallback.classList.remove('show');
+    playerVideo.style.aspectRatio = ''; // clear any real ratio set for the
+      // previous video so this one starts from the 9:16 CSS placeholder again
+    playerVideo.src = `/api/play/${v.id}`;
+    playerVideo.playbackRate = 1;
+  }
+
   if (!v.watched) {
     v.watched = true;
     toggleWatched(v.id, true);
@@ -421,6 +496,7 @@ function closePlayer() {
   playerVideo.pause();
   playerVideo.removeAttribute('src');
   playerVideo.load();
+  playerFrame.src = 'about:blank';
 }
 
 playerClose.addEventListener('click', closePlayer);
@@ -503,7 +579,10 @@ function card(v) {
     <div class="meta">
       <div class="title">${escapeHtml(v.title || '(untitled)')}</div>
       <div class="row">
-        <span class="user" data-user="${escapeHtml(v.user)}">@${escapeHtml(v.user)}</span>
+        <span class="user" data-user="${escapeHtml(v.user)}">
+          <span class="platform-badge ${v.platform}">${v.platform === 'youtube' ? 'YT' : 'DY'}</span>
+          @${escapeHtml(v.user)}
+        </span>
         <span class="date">${fmtDate(v.published_at)}</span>
       </div>
       <div class="row">
@@ -586,7 +665,9 @@ function renderCreatorActiveState() {
 }
 
 async function loadCreators() {
-  const res = await fetch('/api/creators');
+  const params = new URLSearchParams();
+  if (platformFilter.value) params.set('platform', platformFilter.value);
+  const res = await fetch('/api/creators?' + params.toString());
   const data = await res.json();
   creatorList.innerHTML = '';
 
@@ -603,7 +684,7 @@ async function loadCreators() {
     row.dataset.user = c.name;
     const badge = c.unwatched_synced > 0 ? c.unwatched_synced : '';
     row.innerHTML = `
-      <img src="${c.avatar_url}" loading="lazy" alt="">
+      <img src="${c.avatar_url}" loading="lazy" alt="" onerror="this.style.visibility='hidden'">
       <span class="cname">${escapeHtml(c.name)}</span>
       <span class="cbadge">${badge}</span>
     `;
@@ -620,6 +701,7 @@ async function loadVideos() {
   if (unwatchedOnly.checked) params.set('watched', 'false');
   if (showFiltered.checked) params.set('show_filtered', 'true');
   if (activeUser) params.set('user', activeUser);
+  if (platformFilter.value) params.set('platform', platformFilter.value);
 
   const res = await fetch('/api/videos?' + params.toString());
   const data = await res.json();
@@ -713,16 +795,92 @@ async function startLogin() {
   }
 }
 
+async function runYoutubeSync() {
+  ytSyncBtn.disabled = true;
+  syncStatus.textContent = 'Syncing YouTube…';
+  showBusy('Syncing your YouTube subscriptions…');
+  try {
+    const res = await fetch('/api/youtube/sync?limit=30', { method: 'POST' });
+    const data = await res.json();
+    if (data.error) {
+      syncStatus.textContent = data.error;
+    } else {
+      syncStatus.textContent = `YouTube: +${data.new} new (${data.total_in_db} total)`;
+      loadVideos();
+      loadCreators();
+    }
+  } catch (e) {
+    syncStatus.textContent = 'YouTube sync failed — is the container running?';
+  }
+  hideBusy();
+  ytSyncBtn.disabled = false;
+}
+
+let ytPollTimer = null;
+
+function stopYoutubeLoginPoll() {
+  if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
+  ytLoginOverlay.classList.remove('show');
+  vncFrame.src = 'about:blank';
+}
+
+async function pollYoutubeLogin() {
+  const res = await fetch('/api/youtube/status');
+  const data = await res.json();
+  if (data.logged_in) {
+    stopYoutubeLoginPoll();
+    updateYoutubeLoginButton(true);
+    syncStatus.textContent = 'Logged in to YouTube';
+  }
+}
+
+async function startYoutubeLogin() {
+  ytLoginBtn.disabled = true;
+  try {
+    const res = await fetch('/api/youtube/login/start', { method: 'POST' });
+    const data = await res.json();
+    if (data.vnc_url) {
+      vncFrame.src = data.vnc_url;
+      ytLoginOverlay.classList.add('show');
+      ytPollTimer = setInterval(pollYoutubeLogin, 2500);
+    } else {
+      syncStatus.textContent = data.error || data.message || 'Could not start YouTube login';
+    }
+  } catch (e) {
+    syncStatus.textContent = 'Could not reach the server to start YouTube login';
+  }
+  ytLoginBtn.disabled = false;
+}
+
+function updateYoutubeLoginButton(loggedIn) {
+  ytLoginBtn.textContent = loggedIn ? 'Re-login to YouTube' : 'Login to YouTube';
+}
+
+async function initYoutubeStatus() {
+  try {
+    const res = await fetch('/api/youtube/status');
+    const data = await res.json();
+    updateYoutubeLoginButton(!!data.logged_in);
+  } catch (e) {
+    // server not reachable yet — leave default button label
+  }
+}
+
 unwatchedOnly.addEventListener('change', loadVideos);
 showFiltered.addEventListener('change', loadVideos);
+platformFilter.addEventListener('change', () => { loadVideos(); loadCreators(); });
 syncBtn.addEventListener('click', runSync);
 backfillBtn.addEventListener('click', runBackfill);
+ytLoginBtn.addEventListener('click', startYoutubeLogin);
+ytSyncBtn.addEventListener('click', runYoutubeSync);
+ytLoginClose.addEventListener('click', stopYoutubeLoginPoll);
 
 (async function init() {
   const loggedIn = await checkLogin();
   if (!loggedIn) {
     pollTimer = setInterval(checkLogin, 2500);
   }
+  initYoutubeStatus();
 })();
 </script>
 </body>

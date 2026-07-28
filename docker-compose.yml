@@ -1,6 +1,9 @@
 services:
   douyin-mcp:
     build: ./douyin-mcp
+    # host networking: 8082 (UI/API), 6082 (noVNC, YouTube login only) and
+    # 5900 (x11vnc) all bind to 127.0.0.1 inside the container (see
+    # start.sh), so host networking keeps them host-local, not LAN-exposed.
     network_mode: host
     volumes:
       - ./data:/data

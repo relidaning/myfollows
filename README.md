@@ -1,23 +1,33 @@
 # myfollows
 
-A self-hosted Douyin follow-feed browser. Logs into your Douyin account via
-Playwright, syncs videos from creators you follow into a local SQLite
-database, and serves a web UI to browse thumbnails, watch videos inline, and
-track watched/unwatched state — all without needing Claude or any other LLM
-at runtime.
+A self-hosted follow-feed browser for Douyin **and YouTube subscriptions**.
+Logs into your accounts via Playwright, syncs recent videos into a local
+SQLite database, and serves a web UI to browse thumbnails, watch videos
+inline, and track watched/unwatched state — all without needing Claude or
+any other LLM at runtime.
 
 ## Overview
 
-- **douyin-mcp** (Docker, port 8082) — a Python server (FastMCP/Starlette)
-  wrapping a headless Playwright/Chromium session against douyin.com, plus a
-  REST API and the web UI, all on the same port.
+- **douyin-mcp** (Docker, port 8082) — a Python server (FastMCP/Starlette,
+  `server.py` + `common.py` + `youtube.py`) wrapping Playwright/Chromium
+  sessions against douyin.com and youtube.com, plus a REST API and the web
+  UI, all on the same port. (The directory is still named `douyin-mcp` for
+  history's sake; it now serves both platforms.)
 - **The web UI at `http://localhost:8082/` is the whole app.** It shows a
-  thumbnail grid of videos from followed creators, lets you mark videos
-  watched/unwatched, filter by creator, play videos inline, and trigger a
-  sync — entirely self-service from your browser.
-- Videos live in a local SQLite DB (`data/videos.db`).
-- The server also exposes a few `@mcp.tool()` functions and an `/mcp`
-  endpoint (FastMCP's built-in MCP protocol support) purely as an optional
+  thumbnail grid of videos from both platforms (filterable by platform or
+  creator), lets you mark videos watched/unwatched, play videos inline, and
+  trigger a sync — entirely self-service from your browser.
+- Videos and creators from both platforms live in one local SQLite DB
+  (`data/videos.db`), distinguished by a `platform` column.
+- **Douyin login** is fully headless and self-service — the UI shows a QR
+  code to scan with your phone.
+- **YouTube login is different**: Google blocks automated credential entry,
+  so there's no QR flow. Instead the container runs a virtual display
+  (Xvfb) + VNC server, and the UI's "Login to YouTube" button embeds that
+  as a real, interactive Chromium window (via noVNC) that you drive
+  yourself — see "YouTube login" below.
+- The server also exposes `@mcp.tool()` functions and an `/mcp` endpoint
+  (FastMCP's built-in MCP protocol support) purely as an optional
   convenience — a Claude Code session *can* trigger login/sync from chat if
   ever wanted, but nothing in normal operation needs it. See "MCP tools"
   below if you want to wire it into a Claude Code project's `.mcp.json`.
@@ -29,28 +39,61 @@ docker compose up -d
 ```
 
 First run builds the image (Playwright + Chromium, ~1-2GB). Persists to
-`data/` (gitignored — `storage_state.json` holds live session cookies, never
-commit it):
+`data/` (gitignored — the `*storage_state.json` files hold live session
+cookies, never commit them):
 - `storage_state.json` — Douyin login session
-- `videos.db` — SQLite: synced videos + watched state
-- `qrcode.png` — most recent login QR (regenerated each login attempt)
+- `youtube_storage_state.json` — YouTube/Google login session
+- `videos.db` — SQLite: synced videos + watched state (both platforms)
+- `qrcode.png` — most recent Douyin login QR (regenerated each login attempt)
 
-Then open `http://localhost:8082/` — the page handles login (shows the QR,
-polls for scan completion) and syncing itself.
+Then open `http://localhost:8082/` — the page handles Douyin login (shows
+the QR, polls for scan completion) and syncing itself. Use the "Login to
+YouTube" button for the YouTube session (see below); both are optional
+independently of each other.
 
-Network access to douyin.com from this host is required, and Douyin runs
-anti-bot risk-control that can outright block a session — see the CAPTCHA
-note below.
+Network access to douyin.com/youtube.com from this host is required, and
+Douyin runs anti-bot risk-control that can outright block a session — see
+the CAPTCHA note below.
 
 ### Login troubleshooting
 
-If login returns `{"status": "error", "reason": "captcha_wall"}`: Douyin
-served a `验证码中间页` CAPTCHA interstitial before any page JS ran —
+If Douyin login returns `{"status": "error", "reason": "captcha_wall"}`:
+Douyin served a `验证码中间页` CAPTCHA interstitial before any page JS ran —
 server-side IP/fingerprint risk-control, not a bug, and no retry-immediately
 or client-side flag fixes it. Confirmed 2026-07-28 on a flagged sandbox
 network; resolved by running the container from a normal residential/office
 network. A `reason: stale_selector` error instead means Douyin's login DOM
 changed — fix `QR_SELECTOR`/`LOGGED_IN_SELECTOR` in `server.py`.
+
+## YouTube login
+
+Google actively blocks automated sign-in (the classic "This browser or app
+may not be secure" wall), and there's no public QR-based login like
+Douyin's — so this can't be a fully headless, self-service flow the way
+Douyin's is. Instead:
+
+1. Click **"Login to YouTube"** in the UI. This launches a real, headed
+   Chromium inside the container on a virtual display (Xvfb, `:99`) and
+   points it at Google's sign-in page.
+2. The UI embeds that browser via a **noVNC** window (`start.sh` boots
+   `x11vnc` + `websockify`, both bound to `127.0.0.1` only — never exposed
+   beyond this host even though the VNC server runs with no password).
+   Click into it and sign in normally — email, password, 2FA/passkey,
+   whatever your account requires. This is a real interaction with Google's
+   actual login UI, not automation, so it isn't treated as bot activity.
+3. Once `youtube.py` detects the logged-in avatar button, it saves the
+   session to `data/youtube_storage_state.json`, closes the headed browser
+   (freeing the virtual display), and the UI's modal closes itself. From
+   then on, syncs reuse that saved session headlessly — no VNC needed again
+   unless the session expires.
+
+If the noVNC window doesn't load: check the container has `xvfb`, `x11vnc`,
+`novnc`, and `websockify` installed (`douyin-mcp/Dockerfile`) and that
+`start.sh` actually ran (`CMD ["./start.sh"]`, not `python server.py`
+directly). If YouTube's subscriptions feed comes back empty while logged
+in, YouTube's DOM likely changed — inspect
+`https://www.youtube.com/feed/subscriptions` with devtools and update
+`VIDEO_CARD_SELECTOR`/`_scrape_subscriptions` in `youtube.py`.
 
 ## MCP tools (douyin-mcp) — optional, for Claude Code
 
@@ -66,21 +109,28 @@ Code chat session.
 | `douyin_login_wait(timeout_sec=90)` | Blocks until the QR is scanned, then persists the session |
 | `douyin_sync_feed(limit=30)` | Fetches recent followed-creator videos + the creator sidebar list, upserts into the DB. Returns `{fetched, new, total_in_db, creators}` — not the video list, since browsing happens in the UI |
 | `douyin_backfill_play_urls(limit=50)` | Fetches playable links for rows synced before that field existed (one page load per video, ~2-3s each — slower than a sync, call repeatedly until `remaining` is 0). Also a "Fix old links" button in the UI |
+| `youtube_login_status()` | `{logged_in: bool}` |
+| `youtube_login_start()` | Opens an interactive Chromium at Google sign-in on the virtual display. Returns `{status: "vnc_ready", vnc_url}` — a human needs to actually use `vnc_url` (or the UI) to sign in; this can't be automated |
+| `youtube_login_wait(timeout_sec=180)` | Blocks until the interactive login completes, then persists the session |
+| `youtube_sync_feed(limit=30)` | Fetches recent videos from `youtube.com/feed/subscriptions`, upserts into the DB. Returns `{fetched, new, total_in_db, creators}` |
 
 ## REST API (same port, used by the UI)
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /` | The UI page |
-| `GET /api/status` | `{logged_in, in_progress}` — cheap poll, doesn't navigate away from an in-progress login |
-| `POST /api/login/start` | Starts login, saves QR |
-| `GET /api/login/qr.png` | The current QR image |
+| `GET /api/status` | Douyin: `{logged_in, in_progress}` — cheap poll, doesn't navigate away from an in-progress login |
+| `POST /api/login/start` | Starts Douyin login, saves QR |
+| `GET /api/login/qr.png` | The current Douyin QR image |
 | `POST /api/sync?limit=30` | Same as `douyin_sync_feed` |
 | `POST /api/backfill?limit=50` | Same as `douyin_backfill_play_urls` |
-| `GET /api/videos?watched=false&show_filtered=false&user=` | List videos (JSON), filterable |
+| `GET /api/youtube/status` | Same as `youtube_login_status`/poll — `{logged_in, in_progress}` |
+| `POST /api/youtube/login/start` | Same as `youtube_login_start` — returns `{status: "vnc_ready", vnc_url}` |
+| `POST /api/youtube/sync?limit=30` | Same as `youtube_sync_feed` |
+| `GET /api/videos?watched=false&show_filtered=false&user=&platform=` | List videos (JSON), filterable by watched state, creator, and now `platform` (`douyin`/`youtube`) |
 | `POST /api/videos/{id}/watched` | Body `{"watched": true\|false}` |
-| `GET /api/creators` | Followed creators (name, avatar, real Douyin unread count, our unwatched-synced count), for the sidebar |
-| `GET /api/play/{id}` | Proxies the video's actual playable stream (see below) — this is what the UI's popup player points `<video src>` at, not the CDN URL directly |
+| `GET /api/creators?platform=` | Creators (name, avatar, unread/unwatched counts) for the sidebar, optionally filtered by platform |
+| `GET /api/play/{id}` | Proxies a **Douyin** video's actual playable stream (see below) — YouTube videos instead play via the official `youtube.com/embed/{id}` iframe, no proxying needed |
 
 ## Keyboard shortcuts (ui.html)
 
@@ -207,12 +257,36 @@ Confirmed 2026-07-28, don't relitigate without checking devtools first:
   the pre-existing `data/videos.db`. Any future column addition needs the
   same treatment (check `existing_cols` pattern in `_db()`).
 
+## YouTube subscriptions sync (youtube.py)
+
+Unlike Douyin's `/follow`, YouTube's `/feed/subscriptions` page is already
+the exact "recent uploads from channels I'm subscribed to" view, sorted
+newest-first — no per-channel enumeration or pagination-arrow clicking
+needed, just scroll-to-load-more and scrape the `<ytd-rich-item-renderer>`
+cards that appear (title, channel, video id, thumbnail, relative time text).
+
+- **`published_at` is approximate.** The feed DOM only exposes relative
+  text ("3 hours ago", "2 days ago"), not an exact timestamp —
+  `_parse_relative_time` converts that to an ISO timestamp by subtracting
+  from "now" at scrape time. Fine for newest-first ordering and display, not
+  exact to the second. (Douyin's `create_time` field, by contrast, is an
+  exact unix timestamp from the real API.)
+- **No CDN proxy needed for playback** — YouTube videos play via the
+  official `youtube.com/embed/{id}` iframe in the UI, so `play_url` is
+  always left empty for YouTube rows; don't be surprised it's blank, that's
+  expected (see `/api/play/{id}` note above, which is Douyin-only).
+- **Creator avatars are left blank** — the subscriptions feed's per-video
+  card doesn't reliably expose a per-channel avatar image the way Douyin's
+  follow sidebar does, so YouTube creator rows just have no avatar (the UI
+  hides the broken-image icon via `onerror`).
+
 ## Rules of thumb
 
 - **Never fabricate video data.** If a field can't be extracted, leave it
   empty rather than guessing.
-- **Don't loop login attempts unattended** — a QR scan needs a human
-  present.
+- **Don't loop login attempts unattended** — Douyin's QR scan and YouTube's
+  interactive VNC login both need a human present.
 - **Selectors and the feed API will drift.** Treat an empty feed or missing
   QR as a maintenance signal — check `server.py`'s selector constants and
-  `_parse_feed_response` first, per the section above.
+  `_parse_feed_response` (Douyin) or `youtube.py`'s `VIDEO_CARD_SELECTOR`/
+  `_scrape_subscriptions` (YouTube) first, per the sections above.

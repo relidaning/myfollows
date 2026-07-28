@@ -18,10 +18,8 @@ tab and update the relevant constant or `_parse_feed_response` below.
 """
 
 import asyncio
-import datetime
 import logging
 import os
-import sqlite3
 import time
 from typing import Optional
 
@@ -31,6 +29,10 @@ from playwright.async_api import Page, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+
+import common
+import youtube
+from common import QR_IMAGE_PATH, _VIDEO_COLUMNS, _db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,10 +46,7 @@ _log = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 
-DATA_DIR = os.getenv("DATA_DIR", "/data")
-STORAGE_STATE_PATH = os.path.join(DATA_DIR, "storage_state.json")
-DB_PATH = os.path.join(DATA_DIR, "videos.db")
-QR_IMAGE_PATH = os.path.join(DATA_DIR, "qrcode.png")
+STORAGE_STATE_PATH = common.DOUYIN_STORAGE_STATE_PATH
 UI_HTML_PATH = os.path.join(os.path.dirname(__file__), "ui.html")
 
 DOUYIN_HOME = "https://www.douyin.com/"
@@ -69,19 +68,7 @@ SAVE_LOGIN_DIALOG_DISMISS_TEXT = "取消"  # "Cancel" on the post-login "save lo
 MAX_NEXT_CLICKS = 40
 NEXT_CLICK_WAIT_MS = 1800
 
-# Content filters (user preference, 2026-07-28): hide videos primarily about
-# these topics from the default UI view. Keyword match on title+content,
-# case-insensitive. Edit these lists to add/remove categories.
-FILTER_CATEGORIES: dict[str, list[str]] = {
-    "drawing": ["绘画", "画画", "美术", "手绘", "素描", "水彩", "马克笔", "临摹", "画笔",
-                "drawing tutorial", "painting tutorial", "sketch tutorial"],
-    "gym": ["健身", "胸肌", "背肌", "腹肌", "深蹲", "卧推", "撸铁", "增肌", "训练动作",
-            "workout", "gym "],
-}
-
-os.makedirs(DATA_DIR, exist_ok=True)
-
-mcp = FastMCP("douyin")
+mcp = FastMCP("myfollows")
 
 # ---------------------------------------------------------------------------
 # Browser lifecycle — single shared instance for the life of the process.
@@ -141,115 +128,8 @@ async def _get_context(fresh: bool):
     return _context
 
 
-# ---------------------------------------------------------------------------
-# SQLite store
-# ---------------------------------------------------------------------------
-
-_VIDEO_COLUMNS = [
-    "id", "url", "title", "user", "published_at", "content",
-    "thumbnail_url", "play_url", "filtered_category", "watched", "fetched_at",
-]
-
-
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS videos (
-            id TEXT PRIMARY KEY,
-            url TEXT,
-            title TEXT,
-            user TEXT,
-            published_at TEXT,
-            content TEXT,
-            thumbnail_url TEXT,
-            play_url TEXT,
-            filtered_category TEXT,
-            watched INTEGER NOT NULL DEFAULT 0,
-            fetched_at TEXT
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS creators (
-            name TEXT PRIMARY KEY,
-            avatar_url TEXT,
-            unread_count INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT
-        )
-        """
-    )
-    # CREATE TABLE IF NOT EXISTS doesn't add columns to a table created by an
-    # earlier schema version — migrate in place instead of dropping data.
-    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
-    if "play_url" not in existing_cols:
-        conn.execute("ALTER TABLE videos ADD COLUMN play_url TEXT")
-    return conn
-
-
-def _classify_filter(title: str, content: str) -> Optional[str]:
-    text = f"{title} {content}".lower()
-    for category, keywords in FILTER_CATEGORIES.items():
-        for kw in keywords:
-            if kw.lower() in text:
-                return category
-    return None
-
-
-def _upsert_videos(videos: list[dict]) -> tuple[int, int]:
-    """Insert new videos; for ones already in the DB, backfill play_url/
-    thumbnail_url if they were empty (covers rows synced before those fields
-    existed) without touching watched state. Returns (new_count, total)."""
-    conn = _db()
-    if not videos:
-        total = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
-        conn.close()
-        return 0, total
-
-    ids = [v["id"] for v in videos]
-    placeholders = ",".join("?" * len(ids))
-    existing_ids = {
-        row[0] for row in conn.execute(f"SELECT id FROM videos WHERE id IN ({placeholders})", ids)
-    }
-
-    now = datetime.datetime.now().isoformat(timespec="seconds")
-    for v in videos:
-        category = _classify_filter(v.get("title", ""), v.get("content", ""))
-        conn.execute(
-            "INSERT INTO videos "
-            "(id, url, title, user, published_at, content, thumbnail_url, play_url, filtered_category, watched, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) "
-            "ON CONFLICT(id) DO UPDATE SET "
-            "play_url = COALESCE(NULLIF(excluded.play_url, ''), play_url), "
-            "thumbnail_url = COALESCE(NULLIF(excluded.thumbnail_url, ''), thumbnail_url)",
-            (
-                v["id"], v["url"], v["title"], v["user"], v["published_at"],
-                v["content"], v.get("thumbnail_url", ""), v.get("play_url", ""), category, now,
-            ),
-        )
-    conn.commit()
-    new_count = len(ids) - len(existing_ids)
-    total = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
-    conn.close()
-    return new_count, total
-
-
-def _upsert_creators(creators: list[dict]) -> None:
-    if not creators:
-        return
-    conn = _db()
-    now = datetime.datetime.now().isoformat(timespec="seconds")
-    for c in creators:
-        conn.execute(
-            "INSERT INTO creators (name, avatar_url, unread_count, updated_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(name) DO UPDATE SET avatar_url=excluded.avatar_url, "
-            "unread_count=excluded.unread_count, updated_at=excluded.updated_at",
-            (c["name"], c.get("avatar_url", ""), c.get("unread_count", 0), now),
-        )
-    conn.commit()
-    conn.close()
-
+# SQLite store, upsert helpers, and _VIDEO_COLUMNS now live in common.py
+# (shared with youtube.py) — imported at module top.
 
 # ---------------------------------------------------------------------------
 # Login (shared impl used by both MCP tools and REST routes)
@@ -572,8 +452,8 @@ async def _run_sync(limit: int) -> dict:
         finally:
             await page.close()
 
-    _upsert_creators(creators)
-    new_count, total = _upsert_videos(list(items.values()))
+    common.upsert_creators(creators, platform="douyin")
+    new_count, total = common.upsert_videos(list(items.values()), platform="douyin")
     return {
         "fetched": len(items),
         "new": new_count,
@@ -688,6 +568,53 @@ async def douyin_backfill_play_urls(limit: int = 50) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# YouTube MCP tools — thin wrappers around youtube.py. Login differs from
+# Douyin's: there's no QR flow, so youtube_login_start opens a real,
+# interactive browser on the container's virtual display and the user logs
+# in themselves through the noVNC window (see youtube.py's module docstring
+# and the UI's "Login to YouTube" button, which embeds vnc_url in an
+# iframe). Prefer telling the user to use the UI at http://localhost:8082/
+# rather than driving this from chat — there's a live browser window to
+# interact with, which chat can't do.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def youtube_login_status() -> dict:
+    """Check whether a saved YouTube/Google session exists and is still valid."""
+    return await youtube.login_status()
+
+
+@mcp.tool()
+async def youtube_login_start() -> dict:
+    """Open an interactive Chromium at Google sign-in on the virtual display.
+
+    Returns {"status": "vnc_ready", "vnc_url": ...} — tell the user to open
+    that URL (or just use the UI, which embeds it) and log in themselves;
+    automated credential entry is not attempted since Google blocks it.
+    Follow up with youtube_login_wait() once they say they're done.
+    """
+    return await youtube.login_start()
+
+
+@mcp.tool()
+async def youtube_login_wait(timeout_sec: int = 180) -> dict:
+    """Wait for the user to finish the interactive Google login, then persist the session."""
+    return await youtube.login_wait(timeout_sec)
+
+
+@mcp.tool()
+async def youtube_sync_feed(limit: int = 30) -> dict:
+    """Fetch recently published videos from YouTube subscriptions into the local video database.
+
+    Reads https://www.youtube.com/feed/subscriptions (already newest-first).
+    Returns a summary ({fetched, new, total_in_db}), not the full video list
+    — browsing happens in the UI at http://localhost:8082/.
+    """
+    return await youtube.sync(limit)
+
+
+# ---------------------------------------------------------------------------
 # REST API + UI (same port as the MCP endpoint, via custom_route)
 # ---------------------------------------------------------------------------
 
@@ -733,11 +660,28 @@ async def api_backfill(request: Request) -> Response:
     return JSONResponse(await _backfill_play_urls(limit))
 
 
+@mcp.custom_route("/api/youtube/status", methods=["GET"])
+async def api_youtube_status(request: Request) -> Response:
+    return JSONResponse(await youtube.login_poll())
+
+
+@mcp.custom_route("/api/youtube/login/start", methods=["POST"])
+async def api_youtube_login_start(request: Request) -> Response:
+    return JSONResponse(await youtube.login_start())
+
+
+@mcp.custom_route("/api/youtube/sync", methods=["POST"])
+async def api_youtube_sync(request: Request) -> Response:
+    limit = int(request.query_params.get("limit", "30"))
+    return JSONResponse(await youtube.sync(limit))
+
+
 @mcp.custom_route("/api/videos", methods=["GET"])
 async def api_videos(request: Request) -> Response:
     watched_param = request.query_params.get("watched")
     show_filtered = request.query_params.get("show_filtered") == "true"
     user_param = request.query_params.get("user")
+    platform_param = request.query_params.get("platform")
 
     query = f"SELECT {', '.join(_VIDEO_COLUMNS)} FROM videos"
     conditions = []
@@ -750,6 +694,9 @@ async def api_videos(request: Request) -> Response:
     if user_param:
         conditions.append("user = ?")
         params.append(user_param)
+    if platform_param:
+        conditions.append("platform = ?")
+        params.append(platform_param)
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY published_at DESC"
@@ -779,15 +726,23 @@ async def api_toggle_watched(request: Request) -> Response:
 
 @mcp.custom_route("/api/creators", methods=["GET"])
 async def api_creators(request: Request) -> Response:
+    platform_param = request.query_params.get("platform")
     conn = _db()
-    rows = conn.execute(
-        "SELECT c.name, c.avatar_url, c.unread_count, "
-        "(SELECT COUNT(*) FROM videos v WHERE v.user = c.name AND v.watched = 0 AND v.filtered_category IS NULL) AS unwatched_synced "
-        "FROM creators c ORDER BY unwatched_synced DESC, c.name ASC"
-    ).fetchall()
+    query = (
+        "SELECT c.name, c.platform, c.avatar_url, c.unread_count, "
+        "(SELECT COUNT(*) FROM videos v WHERE v.user = c.name AND v.platform = c.platform "
+        "AND v.watched = 0 AND v.filtered_category IS NULL) AS unwatched_synced "
+        "FROM creators c"
+    )
+    params: list = []
+    if platform_param:
+        query += " WHERE c.platform = ?"
+        params.append(platform_param)
+    query += " ORDER BY unwatched_synced DESC, c.name ASC"
+    rows = conn.execute(query, params).fetchall()
     conn.close()
     creators = [
-        {"name": r[0], "avatar_url": r[1], "unread_count": r[2], "unwatched_synced": r[3]}
+        {"name": r[0], "platform": r[1], "avatar_url": r[2], "unread_count": r[3], "unwatched_synced": r[4]}
         for r in rows
     ]
     return JSONResponse({"creators": creators})
