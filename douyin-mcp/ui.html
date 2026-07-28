@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Follows</title>
+<style>
+  :root {
+    --bg: #0b0b0d;
+    --panel: #16161a;
+    --line: #25252b;
+    --text: #ece9e2;
+    --text-dim: #8c8a92;
+    --cyan: #25f4ee;
+    --coral: #fe2c55;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { min-height: 100vh; }
+
+  header {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 16px;
+    padding: 14px 20px;
+    background: rgba(11,11,13,0.92);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .brand {
+    display: flex; align-items: baseline; gap: 8px;
+    font-weight: 700; font-size: 17px; letter-spacing: -0.01em;
+    margin-right: auto;
+  }
+  .brand .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--cyan), var(--coral));
+  }
+  .brand small { color: var(--text-dim); font-weight: 500; font-size: 12px; }
+
+  select, button {
+    font: inherit; color: var(--text);
+    background: #1d1d22; border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 12px;
+    cursor: pointer;
+  }
+  select:hover, button:hover { border-color: #3a3a42; }
+  button:active { transform: scale(0.98); }
+  button.primary {
+    background: var(--text); color: #0b0b0d; border-color: var(--text);
+    font-weight: 600;
+  }
+  button.primary:hover { background: #fff; }
+  button:disabled { opacity: 0.5; cursor: default; transform: none; }
+  label.check {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text-dim);
+    user-select: none; cursor: pointer;
+  }
+  label.check input { accent-color: var(--coral); }
+
+  #syncStatus { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+
+  .layout { display: flex; align-items: flex-start; max-width: 1600px; margin: 0 auto; }
+
+  /* Creator sidebar */
+  aside#sidebar {
+    width: 240px; flex-shrink: 0;
+    position: sticky; top: 61px;
+    height: calc(100vh - 61px);
+    overflow-y: auto;
+    padding: 14px 10px;
+    border-right: 1px solid var(--line);
+  }
+  aside#sidebar h3 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-dim); margin: 4px 10px 8px;
+  }
+  .creator-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px; border-radius: 8px; cursor: pointer;
+    font-size: 13px; color: var(--text);
+  }
+  .creator-row:hover { background: #1a1a1f; }
+  .creator-row.active { background: #1d1d22; box-shadow: inset 2px 0 0 var(--cyan); }
+  .creator-row img {
+    width: 26px; height: 26px; border-radius: 50%; object-fit: cover;
+    background: #26262c; flex-shrink: 0;
+  }
+  .creator-row .cname {
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .creator-row .cbadge {
+    font-size: 10px; color: var(--coral); font-weight: 600;
+    min-width: 16px; text-align: right;
+  }
+  .creator-row.all .cname { font-weight: 600; }
+
+  main { flex: 1; min-width: 0; padding: 20px; }
+
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 16px;
+  }
+
+  .card {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    transition: border-color 0.15s ease, transform 0.2s ease, opacity 0.2s ease;
+  }
+  .card:hover { border-color: #3a3a42; transform: translateY(-2px); }
+  .card.removing { opacity: 0; transform: scale(0.94); pointer-events: none; }
+  .card.watched { opacity: 0.45; }
+  .card.watched:hover { opacity: 0.75; }
+
+  .thumb-btn {
+    display: block; position: relative; aspect-ratio: 3 / 4; background: #1a1a1e;
+    width: 100%; padding: 0; border: none; cursor: pointer;
+  }
+  .thumb-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .play-hint {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    opacity: 0; transition: opacity 0.15s ease; background: rgba(0,0,0,0.25);
+  }
+  .card:hover .play-hint { opacity: 1; }
+  .play-hint svg { width: 36px; height: 36px; filter: drop-shadow(0 1px 4px rgba(0,0,0,0.5)); }
+  .unwatched-dot {
+    position: absolute; top: 8px; left: 8px;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--coral);
+    box-shadow: 0 0 0 3px rgba(254,44,85,0.25);
+  }
+
+  .meta { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .title {
+    font-size: 12.5px; line-height: 1.35; color: var(--text);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    min-height: 2.7em;
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .user { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .user:hover { color: var(--cyan); }
+  .date { font-size: 10.5px; color: #5f5d64; white-space: nowrap; }
+
+  .watch-toggle {
+    padding: 5px 8px; font-size: 11px; border-radius: 6px;
+    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+  }
+  .watch-toggle:hover { border-color: var(--cyan); color: var(--cyan); }
+  .card.watched .watch-toggle { color: var(--text-dim); }
+
+  #empty {
+    display: none; text-align: center; padding: 80px 20px; color: var(--text-dim);
+  }
+  #empty h2 { color: var(--text); font-size: 18px; margin-bottom: 6px; }
+
+  /* Login overlay */
+  #loginOverlay {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(11,11,13,0.96);
+    display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 18px; text-align: center; padding: 24px;
+  }
+  #loginOverlay.show { display: flex; }
+  #loginOverlay h1 { font-size: 20px; margin: 0; }
+  #loginOverlay p { color: var(--text-dim); font-size: 13px; max-width: 340px; margin: 0; }
+  #qrWrap {
+    width: 220px; height: 220px; border-radius: var(--radius);
+    background: #fff; display: flex; align-items: center; justify-content: center;
+    overflow: hidden; border: 1px solid var(--line);
+  }
+  #qrWrap img { width: 100%; height: 100%; object-fit: contain; }
+  #qrWrap .placeholder { color: #999; font-size: 12px; }
+  .spinner-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--cyan);
+    display: inline-block; animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
+
+  /* Busy mask — shown during sync/backfill to block interaction */
+  #busyOverlay {
+    position: fixed; inset: 0; z-index: 55;
+    background: rgba(11,11,13,0.7);
+    backdrop-filter: blur(1px);
+    display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px;
+  }
+  #busyOverlay.show { display: flex; }
+  .spinner-ring {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,0.15); border-top-color: var(--cyan);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #busyOverlay p { color: var(--text); font-size: 13px; margin: 0; }
+
+  /* Video player modal */
+  #playerOverlay {
+    position: fixed; inset: 0; z-index: 60;
+    background: rgba(0,0,0,0.85);
+    display: none; align-items: center; justify-content: center;
+    padding: 4px;
+  }
+  #playerOverlay.show { display: flex; }
+  #playerCard {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    width: fit-content; max-width: 99vw; max-height: 99vh;
+  }
+  #speedBadge {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.75); color: #fff; font-size: 13px; font-weight: 600;
+    padding: 5px 12px; border-radius: 20px; letter-spacing: 0.01em;
+    opacity: 0; transition: opacity 0.15s ease; pointer-events: none;
+  }
+  #speedBadge.show { opacity: 1; }
+  #playerCard video {
+    display: block;
+    width: auto; height: auto;
+    max-width: 99vw; max-height: 95vh;
+    aspect-ratio: 9 / 16; /* placeholder so it reserves full size
+      immediately instead of popping in small then growing; real intrinsic
+      ratio overrides this once metadata loads. Must stay paired with
+      width/height:auto (not a fixed height) or non-9:16 videos render
+      wrong — confirmed 2026-07-28, this broke once already */
+    border-radius: var(--radius);
+    background: #000;
+  }
+  #playerCard video.hidden { display: none; }
+  #playerFallback {
+    display: none; padding: 24px 16px; text-align: center;
+    font-size: 13px; color: var(--text-dim);
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    width: min(94vw, 480px);
+  }
+  #playerFallback.show { display: block; }
+  #playerMeta { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; width: 100%; min-width: 280px; }
+  #playerMeta .title { font-size: 13px; -webkit-line-clamp: 3; min-height: 0; }
+  #playerClose {
+    background: transparent; border: 1px solid var(--line); color: var(--text);
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; padding: 0;
+  }
+  #playerClose:hover { border-color: var(--coral); color: var(--coral); }
+  #playerLink { font-size: 11.5px; color: var(--text-dim); }
+  #playerLink a { color: var(--cyan); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot"></span>Follows<small id="countLabel"></small></div>
+  <label class="check"><input type="checkbox" id="unwatchedOnly" checked> Unwatched only</label>
+  <label class="check"><input type="checkbox" id="showFiltered"> Show filtered (gym/drawing)</label>
+  <span id="syncStatus"></span>
+  <button id="backfillBtn" title="Fetch playable links for videos synced before in-page playback existed">Fix old links</button>
+  <button class="primary" id="syncBtn">Sync now</button>
+</header>
+
+<div class="layout">
+  <aside id="sidebar">
+    <h3>Creators</h3>
+    <div id="creatorList"></div>
+  </aside>
+
+  <main>
+    <div id="grid"></div>
+    <div id="empty">
+      <h2>Nothing here</h2>
+      <p id="emptyMsg">No videos match this filter.</p>
+    </div>
+  </main>
+</div>
+
+<div id="loginOverlay">
+  <h1>Log in to Douyin</h1>
+  <p>Open the Douyin app → tap ≡ in the top-left → "扫一扫" and scan this code.</p>
+  <div id="qrWrap"><span class="placeholder">Loading QR…</span></div>
+  <p><span class="spinner-dot"></span> Waiting for scan…</p>
+</div>
+
+<div id="busyOverlay">
+  <div class="spinner-ring"></div>
+  <p id="busyText">Syncing…</p>
+</div>
+
+<div id="playerOverlay">
+  <div id="playerCard">
+    <span id="speedBadge"></span>
+    <video id="playerVideo" controls autoplay playsinline></video>
+    <div id="playerFallback">Playback isn't available for this video (it was synced before we started saving playable links) — open it on Douyin instead.</div>
+    <div id="playerMeta">
+      <div>
+        <div class="title" id="playerTitle"></div>
+        <div id="playerLink"><a id="playerSourceLink" href="#" target="_blank" rel="noopener">Open on Douyin ↗</a></div>
+      </div>
+      <button id="playerClose" aria-label="Close">✕</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const grid = document.getElementById('grid');
+const empty = document.getElementById('empty');
+const emptyMsg = document.getElementById('emptyMsg');
+const countLabel = document.getElementById('countLabel');
+const unwatchedOnly = document.getElementById('unwatchedOnly');
+const showFiltered = document.getElementById('showFiltered');
+const syncBtn = document.getElementById('syncBtn');
+const backfillBtn = document.getElementById('backfillBtn');
+const syncStatus = document.getElementById('syncStatus');
+const loginOverlay = document.getElementById('loginOverlay');
+const qrWrap = document.getElementById('qrWrap');
+const busyOverlay = document.getElementById('busyOverlay');
+const busyText = document.getElementById('busyText');
+
+function showBusy(text) {
+  busyText.textContent = text;
+  busyOverlay.classList.add('show');
+}
+function hideBusy() {
+  busyOverlay.classList.remove('show');
+}
+const creatorList = document.getElementById('creatorList');
+const playerOverlay = document.getElementById('playerOverlay');
+const playerVideo = document.getElementById('playerVideo');
+const playerFallback = document.getElementById('playerFallback');
+const playerTitle = document.getElementById('playerTitle');
+const playerSourceLink = document.getElementById('playerSourceLink');
+const playerClose = document.getElementById('playerClose');
+const speedBadge = document.getElementById('speedBadge');
+
+let activeUser = '';
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function openPlayer(v) {
+  playerVideo.classList.remove('hidden');
+  playerFallback.classList.remove('show');
+  playerVideo.style.aspectRatio = ''; // clear any real ratio set for the
+    // previous video so this one starts from the 9:16 CSS placeholder again
+  playerVideo.src = `/api/play/${v.id}`;
+  playerVideo.playbackRate = 1;
+  playerTitle.textContent = v.title || '(untitled)';
+  playerSourceLink.href = v.url;
+  playerOverlay.classList.add('show');
+  if (!v.watched) {
+    v.watched = true;
+    toggleWatched(v.id, true);
+  }
+}
+
+playerVideo.addEventListener('loadedmetadata', () => {
+  // CSS `aspect-ratio: 9/16` is a specified (non-auto) value, which per
+  // spec WINS over the video's real intrinsic ratio rather than being
+  // overridden by it — confirmed 2026-07-28, this was silently forcing
+  // every video (portrait or not) into a 9:16 box, then letterboxing the
+  // real content again inside that wrong box. Once real dimensions are
+  // known, set them as an inline style (higher specificity than the CSS
+  // rule) so max-width/max-height sizing uses the video's true shape.
+  if (playerVideo.videoWidth && playerVideo.videoHeight) {
+    playerVideo.style.aspectRatio = `${playerVideo.videoWidth} / ${playerVideo.videoHeight}`;
+  }
+});
+
+const SPEED_STEP = 0.25;
+const SPEED_MIN = 0.25;
+const SPEED_MAX = 3;
+let speedBadgeTimer = null;
+
+function nudgeSpeed(delta) {
+  const next = Math.round((playerVideo.playbackRate + delta) * 100) / 100;
+  playerVideo.playbackRate = Math.min(SPEED_MAX, Math.max(SPEED_MIN, next));
+  const rate = playerVideo.playbackRate;
+  showBadge((rate % 1 === 0 ? rate.toFixed(0) : rate.toFixed(2)) + '×');
+}
+
+const SEEK_STEP_SEC = 5;
+
+function nudgeSeek(deltaSeconds) {
+  if (!isFinite(playerVideo.duration)) return;
+  playerVideo.currentTime = Math.min(playerVideo.duration, Math.max(0, playerVideo.currentTime + deltaSeconds));
+  showBadge((deltaSeconds > 0 ? '+' : '') + deltaSeconds + 's');
+}
+
+function showBadge(text) {
+  speedBadge.textContent = text;
+  speedBadge.classList.add('show');
+  clearTimeout(speedBadgeTimer);
+  speedBadgeTimer = setTimeout(() => speedBadge.classList.remove('show'), 800);
+}
+
+playerVideo.addEventListener('error', () => {
+  playerVideo.classList.add('hidden');
+  playerFallback.classList.add('show');
+});
+
+function closePlayer() {
+  playerOverlay.classList.remove('show');
+  playerVideo.pause();
+  playerVideo.removeAttribute('src');
+  playerVideo.load();
+}
+
+playerClose.addEventListener('click', closePlayer);
+playerOverlay.addEventListener('click', (e) => { if (e.target === playerOverlay) closePlayer(); });
+
+function togglePause() {
+  if (playerVideo.paused) { playerVideo.play(); showBadge('▶'); }
+  else { playerVideo.pause(); showBadge('❚❚'); }
+}
+
+// Grid-level shortcuts (only active while the player is closed): vim-style
+// count prefix + command, e.g. "5" then "m" marks the first 5 visible
+// videos watched. Bare "m" (no digits) means "1".
+let keyCountBuffer = '';
+let keyCountTimer = null;
+function resetKeyCountBuffer() { keyCountBuffer = ''; }
+
+function playFirstVideo() {
+  if (currentVideos.length === 0) return;
+  openPlayer(currentVideos[0]);
+}
+
+function markFirstNWatched(n) {
+  const targets = currentVideos.slice(0, n).filter(v => !v.watched);
+  if (targets.length === 0) return;
+  targets.forEach(v => {
+    v.watched = true;
+    toggleWatched(v.id, true);
+  });
+  syncStatus.textContent = `Marked ${targets.length} watched`;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closePlayer(); return; }
+
+  if (playerOverlay.classList.contains('show')) {
+    if (e.key === 'ArrowUp') { e.preventDefault(); nudgeSpeed(SPEED_STEP); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); nudgeSpeed(-SPEED_STEP); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); nudgeSeek(SEEK_STEP_SEC); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); nudgeSeek(-SEEK_STEP_SEC); }
+    else if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); togglePause(); }
+    return;
+  }
+
+  const activeTag = (document.activeElement && document.activeElement.tagName) || '';
+  if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
+
+  if (e.key >= '0' && e.key <= '9') {
+    keyCountBuffer += e.key;
+    clearTimeout(keyCountTimer);
+    keyCountTimer = setTimeout(resetKeyCountBuffer, 1500);
+    return;
+  }
+
+  if (e.key === ' ' || e.code === 'Space') {
+    e.preventDefault();
+    playFirstVideo();
+    resetKeyCountBuffer();
+  } else if (e.key === 'm' || e.key === 'M') {
+    e.preventDefault();
+    markFirstNWatched(keyCountBuffer ? parseInt(keyCountBuffer, 10) : 1);
+    resetKeyCountBuffer();
+  } else {
+    resetKeyCountBuffer();
+  }
+});
+
+const PLAY_ICON = `<svg viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>`;
+
+function card(v) {
+  const el = document.createElement('div');
+  el.className = 'card' + (v.watched ? ' watched' : '');
+  el.dataset.id = v.id;
+  el.innerHTML = `
+    <button class="thumb-btn">
+      <img src="${v.thumbnail_url}" loading="lazy" alt="">
+      <span class="play-hint">${PLAY_ICON}</span>
+      ${v.watched ? '' : '<span class="unwatched-dot"></span>'}
+    </button>
+    <div class="meta">
+      <div class="title">${escapeHtml(v.title || '(untitled)')}</div>
+      <div class="row">
+        <span class="user" data-user="${escapeHtml(v.user)}">@${escapeHtml(v.user)}</span>
+        <span class="date">${fmtDate(v.published_at)}</span>
+      </div>
+      <div class="row">
+        <span></span>
+        <button class="watch-toggle" data-id="${v.id}">${v.watched ? 'Mark unwatched' : 'Mark watched'}</button>
+      </div>
+    </div>
+  `;
+  el.querySelector('.thumb-btn').addEventListener('click', () => openPlayer(v));
+  el.querySelector('.watch-toggle').addEventListener('click', () => {
+    v.watched = !v.watched;
+    toggleWatched(v.id, v.watched);
+  });
+  el.querySelector('.user').addEventListener('click', () => selectCreator(v.user));
+  return el;
+}
+
+function updateCardInPlace(id, watched) {
+  const cardEl = grid.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+  if (!cardEl) return;
+
+  if (watched && unwatchedOnly.checked) {
+    // Filtered view no longer includes this video — remove it reactively
+    // instead of waiting for a manual refresh. Also drop it from
+    // currentVideos so keyboard shortcuts ("first N") stay in sync with
+    // what's actually still visible.
+    currentVideos = currentVideos.filter(v => v.id !== id);
+    cardEl.classList.add('removing');
+    setTimeout(() => {
+      cardEl.remove();
+      refreshGridChrome();
+    }, 200);
+    return;
+  }
+
+  cardEl.classList.toggle('watched', watched);
+  const btn = cardEl.querySelector('.watch-toggle');
+  if (btn) btn.textContent = watched ? 'Mark unwatched' : 'Mark watched';
+  const existingDot = cardEl.querySelector('.unwatched-dot');
+  if (watched && existingDot) {
+    existingDot.remove();
+  } else if (!watched && !existingDot) {
+    const dot = document.createElement('span');
+    dot.className = 'unwatched-dot';
+    cardEl.querySelector('.thumb-btn').appendChild(dot);
+  }
+}
+
+function refreshGridChrome() {
+  const count = grid.children.length;
+  countLabel.textContent = count ? ` · ${count}` : '';
+  if (count === 0) {
+    empty.style.display = 'block';
+    emptyMsg.textContent = unwatchedOnly.checked
+      ? "You're caught up — nothing unwatched. Try syncing, or uncheck \"Unwatched only\"."
+      : 'No videos match this filter.';
+  }
+}
+
+async function toggleWatched(id, watched) {
+  updateCardInPlace(id, watched);
+  await fetch(`/api/videos/${id}/watched`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ watched }),
+  });
+  loadCreators();
+}
+
+function selectCreator(user) {
+  activeUser = user;
+  renderCreatorActiveState();
+  loadVideos();
+}
+
+function renderCreatorActiveState() {
+  creatorList.querySelectorAll('.creator-row').forEach(row => {
+    row.classList.toggle('active', row.dataset.user === activeUser);
+  });
+}
+
+async function loadCreators() {
+  const res = await fetch('/api/creators');
+  const data = await res.json();
+  creatorList.innerHTML = '';
+
+  const allRow = document.createElement('div');
+  allRow.className = 'creator-row all';
+  allRow.dataset.user = '';
+  allRow.innerHTML = `<span class="cname">All creators</span>`;
+  allRow.addEventListener('click', () => selectCreator(''));
+  creatorList.appendChild(allRow);
+
+  data.creators.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'creator-row';
+    row.dataset.user = c.name;
+    const badge = c.unwatched_synced > 0 ? c.unwatched_synced : '';
+    row.innerHTML = `
+      <img src="${c.avatar_url}" loading="lazy" alt="">
+      <span class="cname">${escapeHtml(c.name)}</span>
+      <span class="cbadge">${badge}</span>
+    `;
+    row.addEventListener('click', () => selectCreator(c.name));
+    creatorList.appendChild(row);
+  });
+  renderCreatorActiveState();
+}
+
+let currentVideos = [];
+
+async function loadVideos() {
+  const params = new URLSearchParams();
+  if (unwatchedOnly.checked) params.set('watched', 'false');
+  if (showFiltered.checked) params.set('show_filtered', 'true');
+  if (activeUser) params.set('user', activeUser);
+
+  const res = await fetch('/api/videos?' + params.toString());
+  const data = await res.json();
+  currentVideos = data.videos;
+
+  grid.innerHTML = '';
+  if (data.videos.length === 0) {
+    empty.style.display = 'block';
+    emptyMsg.textContent = unwatchedOnly.checked
+      ? "You're caught up — nothing unwatched. Try syncing, or uncheck \"Unwatched only\"."
+      : 'No videos match this filter.';
+  } else {
+    empty.style.display = 'none';
+    data.videos.forEach(v => grid.appendChild(card(v)));
+  }
+  countLabel.textContent = data.videos.length ? ` · ${data.videos.length}` : '';
+}
+
+async function runSync() {
+  syncBtn.disabled = true;
+  syncStatus.textContent = 'Syncing…';
+  showBusy('Syncing your follow feed…');
+  try {
+    const res = await fetch('/api/sync?limit=30', { method: 'POST' });
+    const data = await res.json();
+    if (data.error) {
+      syncStatus.textContent = data.error;
+    } else {
+      syncStatus.textContent = `+${data.new} new (${data.total_in_db} total)`;
+      loadVideos();
+      loadCreators();
+    }
+  } catch (e) {
+    syncStatus.textContent = 'Sync failed — is the container running?';
+  }
+  hideBusy();
+  syncBtn.disabled = false;
+}
+
+async function runBackfill() {
+  backfillBtn.disabled = true;
+  const originalLabel = backfillBtn.textContent;
+  backfillBtn.textContent = 'Fixing…';
+  showBusy('Fetching playable links for old videos…');
+  try {
+    const res = await fetch('/api/backfill?limit=50', { method: 'POST' });
+    const data = await res.json();
+    if (data.error) {
+      syncStatus.textContent = data.error;
+    } else {
+      syncStatus.textContent = `Fixed ${data.updated} (${data.remaining} left)`;
+      loadVideos();
+    }
+  } catch (e) {
+    syncStatus.textContent = 'Backfill failed — is the container running?';
+  }
+  hideBusy();
+  backfillBtn.textContent = originalLabel;
+  backfillBtn.disabled = false;
+}
+
+let pollTimer = null;
+
+async function checkLogin() {
+  const res = await fetch('/api/status');
+  const data = await res.json();
+  if (data.logged_in) {
+    loginOverlay.classList.remove('show');
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    loadVideos();
+    loadCreators();
+    return true;
+  }
+  loginOverlay.classList.add('show');
+  if (data.in_progress) {
+    qrWrap.innerHTML = `<img src="/api/login/qr.png?ts=${Date.now()}" alt="QR code">`;
+  } else {
+    startLogin();
+  }
+  return false;
+}
+
+async function startLogin() {
+  qrWrap.innerHTML = '<span class="placeholder">Loading QR…</span>';
+  const res = await fetch('/api/login/start', { method: 'POST' });
+  const data = await res.json();
+  if (data.status === 'qr_ready') {
+    qrWrap.innerHTML = `<img src="/api/login/qr.png?ts=${Date.now()}" alt="QR code">`;
+  } else if (data.error || data.message) {
+    qrWrap.innerHTML = `<span class="placeholder">${escapeHtml(data.message || data.error)}</span>`;
+  }
+}
+
+unwatchedOnly.addEventListener('change', loadVideos);
+showFiltered.addEventListener('change', loadVideos);
+syncBtn.addEventListener('click', runSync);
+backfillBtn.addEventListener('click', runBackfill);
+
+(async function init() {
+  const loggedIn = await checkLogin();
+  if (!loggedIn) {
+    pollTimer = setInterval(checkLogin, 2500);
+  }
+})();
+</script>
+</body>
+</html>

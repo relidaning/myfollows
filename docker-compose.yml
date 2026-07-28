@@ -1,0 +1,10 @@
+services:
+  douyin-mcp:
+    build: ./douyin-mcp
+    network_mode: host
+    volumes:
+      - ./data:/data
+    environment:
+      - DATA_DIR=/data
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
