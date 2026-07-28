@@ -4,6 +4,14 @@ WORKDIR /app
 
 # xvfb/x11vnc/novnc/websockify/x11-utils back the YouTube login flow's
 # in-browser VNC window (see start.sh, youtube.py) — not needed for Douyin.
+# matchbox-window-manager is required too, not optional: a bare Xvfb
+# display has no window manager, which means X never transfers keyboard
+# focus to a clicked-on window — confirmed 2026-07-28, the login page
+# rendered and took mouse clicks over VNC, but every keystroke went
+# nowhere. matchbox auto-maximizes the one window we ever show (the login
+# browser), which also fixes focus. xdotool is a debugging aid only (lets
+# `docker exec` simulate/verify real X input, unlike Playwright's CDP-based
+# keyboard.type which bypasses X entirely and wouldn't have caught this).
 # DEBIAN_FRONTEND=noninteractive is required here: novnc/x11vnc pull in
 # tzdata as a transitive dependency, and tzdata's postinst otherwise blocks
 # on an interactive geographic-area prompt with no TTY to answer it,
@@ -11,7 +19,7 @@ WORKDIR /app
 # runtime; this only affects package install-time debconf behavior.
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl xvfb x11vnc novnc websockify x11-utils && \
+      curl xvfb x11vnc novnc websockify x11-utils matchbox-window-manager xdotool && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
