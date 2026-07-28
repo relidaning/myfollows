@@ -282,10 +282,21 @@
   #ytLoginOverlay.show { display: flex; }
   #ytLoginOverlay h1 { font-size: 20px; margin: 0; }
   #ytLoginOverlay p { color: var(--text-dim); font-size: 13px; max-width: 480px; margin: 0; }
-  #vncFrame {
-    width: min(94vw, 960px); height: min(75vh, 650px);
+  /* Fixed at the virtual display's native 1280x800 (no CSS scaling) —
+     old noVNC's resize=scale mode has small coordinate-transform
+     inaccuracies that can make clicks land a few px off the real target;
+     1:1 pixel mapping avoids that class of bug entirely. Wrapped in a
+     scrollable box so it still fits on smaller viewports. */
+  #vncFrameWrap {
+    width: min(94vw, 1280px); height: min(80vh, 800px);
+    overflow: auto;
     border: 1px solid var(--line); border-radius: var(--radius);
     background: #000;
+  }
+  #vncFrame {
+    display: block;
+    width: 1280px; height: 800px;
+    border: 0;
   }
   #ytLoginClose {
     background: transparent; border: 1px solid var(--line); color: var(--text);
@@ -337,7 +348,9 @@
 <div id="ytLoginOverlay">
   <h1>Log in to YouTube</h1>
   <p>This is a real, interactive browser window running inside the container — Google blocks automated logins, so drive it yourself: click in, sign in (including any 2FA/passkey step), and this closes automatically once it detects you're logged in.</p>
-  <iframe id="vncFrame" src="about:blank" title="YouTube login (VNC)"></iframe>
+  <div id="vncFrameWrap">
+    <iframe id="vncFrame" src="about:blank" title="YouTube login (VNC)"></iframe>
+  </div>
   <p><span class="spinner-dot"></span> Waiting for login…</p>
   <button id="ytLoginClose">Cancel</button>
 </div>

@@ -40,7 +40,13 @@ LOGIN_URL = "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fwww
 
 LOGGED_IN_SELECTOR = "ytd-masthead #avatar-btn"
 VIDEO_CARD_SELECTOR = "ytd-rich-item-renderer"
-NOVNC_URL = "http://localhost:6082/vnc.html?autoconnect=true&resize=scale"
+# No resize=scale: old noVNC (Ubuntu's packaged 1.0.0) has small coordinate-
+# transform inaccuracies in scaled mode that can make clicks land a few px
+# off the real target — confirmed 2026-07-28 as the actual cause of a user
+# report ("can't type numbers") that turned out to be a click never landing
+# on the input field at all. 1:1 native pixels (ui.html sizes the iframe to
+# the real 1280x800 and scrolls if needed) avoids that whole bug class.
+NOVNC_URL = "http://localhost:6082/vnc.html?autoconnect=true"
 
 MAX_SCROLLS = 25
 SCROLL_WAIT_MS = 900
