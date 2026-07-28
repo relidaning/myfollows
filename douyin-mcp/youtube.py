@@ -51,6 +51,15 @@ _USER_AGENT = (
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 
+# Google's domains aren't reachable directly from this host — only through a
+# local proxy (confirmed 2026-07-28: direct connections from the container
+# time out even with network_mode: host, while curl through this proxy
+# succeeds instantly; Douyin needs no such proxy, which is why the existing
+# Douyin browser never set one). Chromium does NOT reliably pick up
+# http_proxy/https_proxy from the environment on headless Linux — it needs
+# an explicit `proxy` launch option, unlike curl/httpx/requests.
+YOUTUBE_PROXY_SERVER = os.getenv("YOUTUBE_PROXY_SERVER", "http://127.0.0.1:10808")
+
 # ---------------------------------------------------------------------------
 # Browser lifecycle. Headless (sync) and headed (interactive login) browsers
 # are kept separate — different launch-time flag, can't share one instance —
@@ -82,6 +91,7 @@ async def _get_headless_context(fresh: bool):
         _headless_browser = await pw.chromium.launch(
             headless=True,
             args=["--disable-blink-features=AutomationControlled"],
+            proxy={"server": YOUTUBE_PROXY_SERVER} if YOUTUBE_PROXY_SERVER else None,
         )
     if fresh and _headless_context is not None:
         await _headless_context.close()
@@ -114,6 +124,7 @@ async def _get_headed_context():
     _headed_browser = await pw.chromium.launch(
         headless=False,
         args=["--disable-blink-features=AutomationControlled", "--window-position=0,0"],
+        proxy={"server": YOUTUBE_PROXY_SERVER} if YOUTUBE_PROXY_SERVER else None,
     )
     _headed_context = await _headed_browser.new_context(
         viewport={"width": 1280, "height": 800},

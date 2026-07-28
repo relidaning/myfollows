@@ -10,4 +10,8 @@ services:
     environment:
       - DATA_DIR=/data
       - TZ=Asia/Shanghai
+      # google.com/youtube.com are only reachable through this local proxy
+      # on this host (Douyin needs none — see youtube.py). Override if the
+      # proxy ever moves; leave unset (empty string) to disable proxying.
+      - YOUTUBE_PROXY_SERVER=http://127.0.0.1:10808
     restart: unless-stopped
