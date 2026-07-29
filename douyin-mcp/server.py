@@ -570,10 +570,9 @@ async def douyin_backfill_play_urls(limit: int = 50) -> dict:
 # ---------------------------------------------------------------------------
 # YouTube MCP tools — thin wrappers around youtube.py. Login differs from
 # Douyin's: there's no QR flow, so youtube_login_start opens a real,
-# interactive browser on the container's virtual display and the user logs
-# in themselves through the noVNC window (see youtube.py's module docstring
-# and the UI's "Login to YouTube" button, which embeds vnc_url in an
-# iframe). Prefer telling the user to use the UI at http://localhost:8082/
+# interactive Chromium window directly on the host's own desktop (see
+# youtube.py's module docstring) and the user logs in themselves in that
+# window. Prefer telling the user to use the UI at http://localhost:8082/
 # rather than driving this from chat — there's a live browser window to
 # interact with, which chat can't do.
 # ---------------------------------------------------------------------------
@@ -587,10 +586,11 @@ async def youtube_login_status() -> dict:
 
 @mcp.tool()
 async def youtube_login_start() -> dict:
-    """Open an interactive Chromium at Google sign-in on the virtual display.
+    """Open an interactive Chromium window at Google sign-in, directly on
+    the host's own desktop.
 
-    Returns {"status": "vnc_ready", "vnc_url": ...} — tell the user to open
-    that URL (or just use the UI, which embeds it) and log in themselves;
+    Returns {"status": "window_opened"} — tell the user a real browser
+    window just opened on their desktop and to log in there themselves;
     automated credential entry is not attempted since Google blocks it.
     Follow up with youtube_login_wait() once they say they're done.
     """
@@ -668,6 +668,14 @@ async def api_youtube_status(request: Request) -> Response:
 @mcp.custom_route("/api/youtube/login/start", methods=["POST"])
 async def api_youtube_login_start(request: Request) -> Response:
     return JSONResponse(await youtube.login_start())
+
+
+@mcp.custom_route("/api/youtube/reload_session", methods=["POST"])
+async def api_youtube_reload_session(request: Request) -> Response:
+    """Called by scripts/import_youtube_cookies.py after writing a fresh
+    youtube_storage_state.json, so the import takes effect immediately
+    instead of needing a container restart."""
+    return JSONResponse(await youtube.reload_session())
 
 
 @mcp.custom_route("/api/youtube/sync", methods=["POST"])

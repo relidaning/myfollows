@@ -3,13 +3,17 @@ Douyin flow but differs in one important way: Google actively blocks
 automated credential entry, and there is no QR-scan login like Douyin's, so
 login can't be fully headless/self-service. Instead:
 
-- Login is a real interactive session: a *headed* Chromium is launched on
-  the container's virtual display (Xvfb, :99 — see start.sh), and the user
-  drives it themselves through a noVNC window embedded in the web UI
-  (http://localhost:6082/vnc.html). Once they finish signing in (including
-  any 2FA/passkey prompt), the session cookies are saved to
+- Login is a real interactive session: a *headed* Chromium is launched
+  directly on the host's own X display (DISPLAY=:0, passed through via
+  docker-compose's /tmp/.X11-unix mount — see docker-compose.yml), so a
+  real Chromium window pops up on the desktop itself, same as any other
+  app window. The user drives it themselves. Once they finish signing in
+  (including any 2FA/passkey prompt), the session cookies are saved to
   youtube_storage_state.json and reused headlessly from then on, same as
-  Douyin's storage_state.json.
+  Douyin's storage_state.json. This only works because the container
+  always runs on the same machine as the desktop it pops up on — a
+  headless remote host would need a different approach (real OAuth,
+  most likely).
 - Sync reads https://www.youtube.com/feed/subscriptions — YouTube's own
   "recent uploads from channels I'm subscribed to" feed, already sorted
   newest-first, so no per-channel enumeration is needed. Videos render as
@@ -40,13 +44,6 @@ LOGIN_URL = "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fwww
 
 LOGGED_IN_SELECTOR = "ytd-masthead #avatar-btn"
 VIDEO_CARD_SELECTOR = "ytd-rich-item-renderer"
-# No resize=scale: old noVNC (Ubuntu's packaged 1.0.0) has small coordinate-
-# transform inaccuracies in scaled mode that can make clicks land a few px
-# off the real target — confirmed 2026-07-28 as the actual cause of a user
-# report ("can't type numbers") that turned out to be a click never landing
-# on the input field at all. 1:1 native pixels (ui.html sizes the iframe to
-# the real 1280x800 and scrolls if needed) avoids that whole bug class.
-NOVNC_URL = "http://localhost:6082/vnc.html?autoconnect=true"
 
 MAX_SCROLLS = 25
 SCROLL_WAIT_MS = 900
@@ -110,7 +107,7 @@ async def _get_headless_context(fresh: bool):
         }
         if not fresh and os.path.exists(common.YOUTUBE_STORAGE_STATE_PATH):
             kwargs["storage_state"] = common.YOUTUBE_STORAGE_STATE_PATH
-        _headless_context = await pw.chromium.new_context(**kwargs)
+        _headless_context = await _headless_browser.new_context(**kwargs)
         await _headless_context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
@@ -118,9 +115,11 @@ async def _get_headless_context(fresh: bool):
 
 
 async def _get_headed_context():
-    """Fresh headed context on the virtual display, for interactive login
-    only. Always starts clean (no storage_state) — a half-authed leftover
-    session is more confusing than starting from a logged-out state."""
+    """Fresh headed context on the host's real X display (DISPLAY=:0, see
+    docker-compose.yml), for interactive login only — the window pops up
+    directly on the desktop. Always starts clean (no storage_state) — a
+    half-authed leftover session is more confusing than starting from a
+    logged-out state."""
     global _headed_browser, _headed_context
     pw = await _get_pw()
     if _headed_browser is not None:
@@ -145,6 +144,21 @@ async def _get_headed_context():
 # ---------------------------------------------------------------------------
 
 
+async def reload_session() -> dict:
+    """Discards the cached headless context so the next call re-reads
+    youtube_storage_state.json from disk. Needed after re-importing cookies
+    (see scripts/import_youtube_cookies.py) — _get_headless_context only
+    loads storage_state once per process lifetime otherwise (fresh=False
+    reuses whatever context already exists), so without this an import
+    would silently have no effect until the container restarts."""
+    global _headless_context
+    async with _headless_lock:
+        if _headless_context is not None:
+            await _headless_context.close()
+            _headless_context = None
+    return {"status": "reloaded"}
+
+
 async def login_status() -> dict:
     if not os.path.exists(common.YOUTUBE_STORAGE_STATE_PATH):
         return {"logged_in": False, "reason": "no saved session"}
@@ -163,17 +177,17 @@ async def login_status() -> dict:
 
 
 async def login_start() -> dict:
-    """Open a real, interactive Chromium on the virtual display and point it
-    at Google sign-in. The caller (server.py's route) hands the user
-    NOVNC_URL to interact with it directly — this function only kicks off
-    the page and returns immediately, it doesn't wait for the user."""
+    """Open a real, interactive Chromium window directly on the host's
+    desktop (see _get_headed_context) and point it at Google sign-in. This
+    function only kicks off the page and returns immediately, it doesn't
+    wait for the user — the caller polls login_poll()/login_wait()."""
     global _login_page
     async with _headed_lock:
         ctx = await _get_headed_context()
         page = await ctx.new_page()
         await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
         _login_page = page
-        return {"status": "vnc_ready", "vnc_url": NOVNC_URL}
+        return {"status": "window_opened"}
 
 
 async def login_poll() -> dict:
@@ -227,25 +241,48 @@ _UNIT_SECONDS = {
     "week": 604800, "month": 2592000, "year": 31536000,
 }
 
+# The subscriptions feed's UI language follows the Google account's own
+# language setting, not the Playwright context's `locale` — confirmed
+# 2026-07-29 that an account set to Chinese renders "3天前" etc. regardless
+# of context locale, so both patterns are needed.
+_RELATIVE_RE_ZH = re.compile(r"(\d+)\s*(秒|分钟|小时|天|周|个月|年)前")
+_UNIT_SECONDS_ZH = {
+    "秒": 1, "分钟": 60, "小时": 3600, "天": 86400,
+    "周": 604800, "个月": 2592000, "年": 31536000,
+}
+
 
 def _parse_relative_time(text: str) -> str:
-    """'Streamed 3 hours ago' / '2 days ago' -> approximate ISO timestamp.
-    YouTube's subscriptions feed only exposes relative text, not an exact
-    timestamp, so this is inherently approximate — good enough for
+    """'Streamed 3 hours ago' / '2 days ago' / '3天前' -> approximate ISO
+    timestamp. YouTube's subscriptions feed only exposes relative text, not
+    an exact timestamp, so this is inherently approximate — good enough for
     newest-first ordering, not for precise scheduling."""
-    m = _RELATIVE_RE.search(text or "")
-    if not m:
-        return ""
-    amount, unit = int(m.group(1)), m.group(2).lower()
-    delta = datetime.timedelta(seconds=amount * _UNIT_SECONDS.get(unit, 0))
+    text = text or ""
+    m = _RELATIVE_RE.search(text)
+    if m:
+        amount, seconds = int(m.group(1)), _UNIT_SECONDS.get(m.group(2).lower(), 0)
+    else:
+        m = _RELATIVE_RE_ZH.search(text)
+        if not m:
+            return ""
+        amount, seconds = int(m.group(1)), _UNIT_SECONDS_ZH.get(m.group(2), 0)
+    delta = datetime.timedelta(seconds=amount * seconds)
     return (datetime.datetime.now() - delta).isoformat(timespec="seconds")
 
 
-async def _scroll_load_more(page) -> None:
+async def _scroll_load_more(page, target_count: int) -> None:
+    """Scrolls until at least `target_count` cards are loaded (or scrolling
+    stalls/hits MAX_SCROLLS). Stopping at the target — not just on stall —
+    matters a lot on accounts with many subscriptions: an unbounded scroll
+    can pull in hundreds of cards (and their thumbnails) well past what the
+    caller actually asked for, confirmed 2026-07-29 as the cause of a sync
+    that took minutes and appeared hung."""
     stall = 0
     prev_count = -1
     for _ in range(MAX_SCROLLS):
         count = await page.locator(VIDEO_CARD_SELECTOR).count()
+        if count >= target_count:
+            break
         if count == prev_count:
             stall += 1
             if stall >= SCROLL_STALL_LIMIT:
@@ -257,11 +294,19 @@ async def _scroll_load_more(page) -> None:
         await page.wait_for_timeout(SCROLL_WAIT_MS)
 
 
-async def _scrape_subscriptions(page) -> list[dict]:
+async def _scrape_subscriptions(page, max_videos: int) -> list[dict]:
     cards = await page.locator(VIDEO_CARD_SELECTOR).all()
     videos = []
     for card in cards:
-        title_el = card.locator("#video-title-link, a#video-title").first
+        if len(videos) >= max_videos:
+            break
+        # YouTube redesigned the feed around a `yt-lockup-view-model` card
+        # (confirmed 2026-07-29) — the old `#video-title-link`/`#video-title`
+        # ids are gone. Selectors below try the new markup first and fall
+        # back to the old ids in case a card renders the legacy layout.
+        title_el = card.locator(
+            "h3.ytLockupMetadataViewModelHeadingReset a, #video-title-link, a#video-title"
+        ).first
         if not await title_el.count():
             continue
         href = await title_el.get_attribute("href") or ""
@@ -269,19 +314,29 @@ async def _scrape_subscriptions(page) -> list[dict]:
         if not vid_match:
             continue
         video_id = vid_match.group(1)
-        title = (await title_el.get_attribute("title") or (await title_el.inner_text()) or "").strip()
 
-        channel_el = card.locator("ytd-channel-name #text, ytd-channel-name a").first
+        # The heading's `title` attribute holds the full, untruncated text;
+        # the link's own text/title can be truncated or include the
+        # duration, so prefer the heading when present.
+        heading_el = card.locator("h3.ytLockupMetadataViewModelHeadingReset, #video-title").first
+        heading_title = await heading_el.get_attribute("title") if await heading_el.count() else None
+        title = (heading_title or await title_el.get_attribute("title")
+                 or (await title_el.inner_text()) or "").strip()
+
+        channel_el = card.locator("a[href^='/@'], ytd-channel-name #text, ytd-channel-name a").first
         channel = (await channel_el.inner_text()).strip() if await channel_el.count() else ""
 
-        meta_spans = card.locator("#metadata-line span")
+        # New layout splits metadata into two rows (channel, then
+        # views + relative time); old layout has one flat `#metadata-line`.
+        # Either way the relative-time text is the last span of the last row.
+        meta_rows = card.locator(".ytContentMetadataViewModelMetadataRow, #metadata-line")
         published_text = ""
-        n = await meta_spans.count()
-        if n:
-            published_text = (await meta_spans.nth(n - 1).inner_text()).strip()
-
-        thumb_el = card.locator("ytd-thumbnail img").first
-        thumb = await thumb_el.get_attribute("src") if await thumb_el.count() else ""
+        rn = await meta_rows.count()
+        if rn:
+            meta_spans = meta_rows.nth(rn - 1).locator("span")
+            n = await meta_spans.count()
+            if n:
+                published_text = (await meta_spans.nth(n - 1).inner_text()).strip()
 
         videos.append({
             "id": video_id,
@@ -290,7 +345,15 @@ async def _scrape_subscriptions(page) -> list[dict]:
             "user": channel,
             "published_at": _parse_relative_time(published_text),
             "content": published_text,
-            "thumbnail_url": thumb or "",
+            # Built from video_id via YouTube's own stable thumbnail CDN
+            # instead of scraping the card's <img src> — confirmed
+            # 2026-07-29 that grabbing "first img in the card" came back
+            # empty/broken for a chunk of videos (lazy-loaded cards whose
+            # <img> hadn't swapped in a real src yet by the time scraping
+            # ran, or whose first <img> was a channel-avatar overlay, not
+            # the thumbnail). i.ytimg.com/vi/{id}/hqdefault.jpg exists for
+            # every valid video ID, no scraping/timing involved.
+            "thumbnail_url": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
             "play_url": "",
         })
     return videos
@@ -317,8 +380,9 @@ async def sync(limit: int = 30) -> dict:
                     "VIDEO_CARD_SELECTOR / _scrape_subscriptions in youtube.py.",
                 }
 
-            await _scroll_load_more(page)
-            videos = (await _scrape_subscriptions(page))[: max(limit, 1) * 3]
+            target = max(limit, 1) * 3
+            await _scroll_load_more(page, target)
+            videos = await _scrape_subscriptions(page, target)
         finally:
             await page.close()
 

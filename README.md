@@ -22,10 +22,11 @@ any other LLM at runtime.
 - **Douyin login** is fully headless and self-service — the UI shows a QR
   code to scan with your phone.
 - **YouTube login is different**: Google blocks automated credential entry,
-  so there's no QR flow. Instead the container runs a virtual display
-  (Xvfb) + VNC server, and the UI's "Login to YouTube" button embeds that
-  as a real, interactive Chromium window (via noVNC) that you drive
-  yourself — see "YouTube login" below.
+  so there's no QR flow. Instead the UI's "Login to YouTube" button opens a
+  real, interactive Chromium window directly on your desktop (the container
+  passes through your host's own X display) that you drive yourself — see
+  "YouTube login" below. Only works because the container runs on the same
+  machine as the desktop it pops up on.
 - The server also exposes `@mcp.tool()` functions and an `/mcp` endpoint
   (FastMCP's built-in MCP protocol support) purely as an optional
   convenience — a Claude Code session *can* trigger login/sync from chat if
@@ -70,28 +71,62 @@ changed — fix `QR_SELECTOR`/`LOGGED_IN_SELECTOR` in `server.py`.
 Google actively blocks automated sign-in (the classic "This browser or app
 may not be secure" wall), and there's no public QR-based login like
 Douyin's — so this can't be a fully headless, self-service flow the way
-Douyin's is. Instead:
+Douyin's is. Two ways to get a session into `data/youtube_storage_state.json`:
+
+### Option A: interactive login via a real desktop window
 
 1. Click **"Login to YouTube"** in the UI. This launches a real, headed
-   Chromium inside the container on a virtual display (Xvfb, `:99`) and
-   points it at Google's sign-in page.
-2. The UI embeds that browser via a **noVNC** window (`start.sh` boots
-   `x11vnc` + `websockify`, both bound to `127.0.0.1` only — never exposed
-   beyond this host even though the VNC server runs with no password).
-   Click into it and sign in normally — email, password, 2FA/passkey,
-   whatever your account requires. This is a real interaction with Google's
-   actual login UI, not automation, so it isn't treated as bot activity.
+   Chromium **directly on your own desktop** — the container passes
+   through your host's X display (`/tmp/.X11-unix` mount + `DISPLAY=:0` in
+   `docker-compose.yml`) instead of running a virtual display, so what
+   appears is an ordinary Chromium window on your taskbar, pointed at
+   Google's sign-in page. This only works because the container runs on
+   the same machine as the desktop it pops up on — a headless remote host
+   would need a different approach (real OAuth, most likely).
+2. In that window, sign in normally — email, password, 2FA/passkey,
+   whatever your account requires. This is a real interaction with
+   Google's actual login UI, not automation, so it isn't treated as bot
+   activity.
 3. Once `youtube.py` detects the logged-in avatar button, it saves the
-   session to `data/youtube_storage_state.json`, closes the headed browser
-   (freeing the virtual display), and the UI's modal closes itself. From
-   then on, syncs reuse that saved session headlessly — no VNC needed again
-   unless the session expires.
+   session to `data/youtube_storage_state.json` and closes the window.
+   From then on, syncs reuse that saved session headlessly — no window
+   needed again unless the session expires.
 
-If the noVNC window doesn't load: check the container has `xvfb`, `x11vnc`,
-`novnc`, and `websockify` installed (`douyin-mcp/Dockerfile`) and that
-`start.sh` actually ran (`CMD ["./start.sh"]`, not `python server.py`
-directly). If YouTube's subscriptions feed comes back empty while logged
-in, YouTube's DOM likely changed — inspect
+If the window doesn't appear: confirm `xhost` on the host allows local
+root connections (`xhost` should list `SI:localuser:root`, the default on
+most desktop distros) and that `/tmp/.X11-unix` is actually mounted into
+the container (`docker-compose.yml`). If a login window is left open from
+a previous attempt, clicking "Login to YouTube" again closes it and opens
+a fresh one (`youtube.py`'s `_get_headed_context`).
+
+### Option B: import your local Chrome's session
+
+If you're already logged into YouTube in your own Chrome on this machine,
+`scripts/import_youtube_cookies.py` skips the interactive step entirely:
+it reads `.youtube.com`/`.google.com` cookies straight out of Chrome's local
+cookie DB (decrypting them via the OS keyring — Secret Service D-Bus API),
+writes them into `data/youtube_storage_state.json` in Playwright's format,
+and pings the running container so it picks up the change immediately (no
+restart needed). Run it from the repo root on the host (not in the
+container):
+
+```
+python3 scripts/import_youtube_cookies.py
+```
+
+**This file is as sensitive as a password** — the imported cookies (SID,
+SAPISID, etc.) are your whole Google account session, not scoped to
+YouTube. It's written `0600` and already covered by `.gitignore`, same as
+the other `*storage_state.json` files.
+
+Google rotates some of these cookies as your real Chrome session keeps
+being used, so an imported session can go stale — if a sync suddenly
+reports `"Session looks logged out"`, just re-run the script.
+
+### Troubleshooting
+
+If YouTube's subscriptions feed comes back empty while logged in,
+YouTube's DOM likely changed — inspect
 `https://www.youtube.com/feed/subscriptions` with devtools and update
 `VIDEO_CARD_SELECTOR`/`_scrape_subscriptions` in `youtube.py`.
 
@@ -110,7 +145,7 @@ Code chat session.
 | `douyin_sync_feed(limit=30)` | Fetches recent followed-creator videos + the creator sidebar list, upserts into the DB. Returns `{fetched, new, total_in_db, creators}` — not the video list, since browsing happens in the UI |
 | `douyin_backfill_play_urls(limit=50)` | Fetches playable links for rows synced before that field existed (one page load per video, ~2-3s each — slower than a sync, call repeatedly until `remaining` is 0). Also a "Fix old links" button in the UI |
 | `youtube_login_status()` | `{logged_in: bool}` |
-| `youtube_login_start()` | Opens an interactive Chromium at Google sign-in on the virtual display. Returns `{status: "vnc_ready", vnc_url}` — a human needs to actually use `vnc_url` (or the UI) to sign in; this can't be automated |
+| `youtube_login_start()` | Opens an interactive Chromium window directly on the host desktop, at Google sign-in. Returns `{status: "window_opened"}` — a human needs to actually sign in in that window; this can't be automated |
 | `youtube_login_wait(timeout_sec=180)` | Blocks until the interactive login completes, then persists the session |
 | `youtube_sync_feed(limit=30)` | Fetches recent videos from `youtube.com/feed/subscriptions`, upserts into the DB. Returns `{fetched, new, total_in_db, creators}` |
 
@@ -125,7 +160,7 @@ Code chat session.
 | `POST /api/sync?limit=30` | Same as `douyin_sync_feed` |
 | `POST /api/backfill?limit=50` | Same as `douyin_backfill_play_urls` |
 | `GET /api/youtube/status` | Same as `youtube_login_status`/poll — `{logged_in, in_progress}` |
-| `POST /api/youtube/login/start` | Same as `youtube_login_start` — returns `{status: "vnc_ready", vnc_url}` |
+| `POST /api/youtube/login/start` | Same as `youtube_login_start` — returns `{status: "window_opened"}` |
 | `POST /api/youtube/sync?limit=30` | Same as `youtube_sync_feed` |
 | `GET /api/videos?watched=false&show_filtered=false&user=&platform=` | List videos (JSON), filterable by watched state, creator, and now `platform` (`douyin`/`youtube`) |
 | `POST /api/videos/{id}/watched` | Body `{"watched": true\|false}` |
@@ -285,7 +320,7 @@ cards that appear (title, channel, video id, thumbnail, relative time text).
 - **Never fabricate video data.** If a field can't be extracted, leave it
   empty rather than guessing.
 - **Don't loop login attempts unattended** — Douyin's QR scan and YouTube's
-  interactive VNC login both need a human present.
+  interactive desktop-window login both need a human present.
 - **Selectors and the feed API will drift.** Treat an empty feed or missing
   QR as a maintenance signal — check `server.py`'s selector constants and
   `_parse_feed_response` (Douyin) or `youtube.py`'s `VIDEO_CARD_SELECTOR`/
