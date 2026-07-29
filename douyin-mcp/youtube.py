@@ -401,3 +401,77 @@ async def sync(limit: int = 30) -> dict:
         "total_in_db": total,
         "creators": len(creators),
     }
+
+
+# Best-effort — UNVERIFIED against a live session at write time (2026-07-29).
+# YouTube's DOM changes fairly often (see module docstring); if unsubscribing
+# silently reports failure, inspect a real channel page with devtools and
+# update these.
+CHANNEL_LINK_SELECTOR = "ytd-video-owner-renderer a[href^='/@'], ytd-channel-name a[href^='/@']"
+SUBSCRIBE_BUTTON_SELECTOR = "ytd-subscribe-button-renderer button, tp-yt-paper-button#subscribe-button"
+UNSUBSCRIBE_CONFIRM_SELECTOR = (
+    "yt-confirm-dialog-renderer #confirm-button button, "
+    "tp-yt-paper-dialog button:has-text('Unsubscribe')"
+)
+
+
+async def unsubscribe(video_id: str) -> dict:
+    """Unsubscribes from this video's channel — a real, hard-to-reverse
+    action on the live Google account, not just a local DB change.
+
+    We don't store a stable channel URL for YouTube creators (only a
+    display name, same limitation as Douyin's follow sidebar — see
+    _scrape_subscriptions), so this resolves the channel fresh from the
+    video itself: opens the video's own watch page, follows its channel
+    link, then clicks the real Subscribed button. Reports {"ok": false}
+    honestly if the button still reads "Subscribed" afterward rather than
+    assuming success from a click not erroring.
+    """
+    if not os.path.exists(common.YOUTUBE_STORAGE_STATE_PATH):
+        return {"ok": False, "error": "Not logged in."}
+
+    async with _headless_lock:
+        ctx = await _get_headless_context(fresh=False)
+        page = await ctx.new_page()
+        try:
+            await page.goto(
+                f"https://www.youtube.com/watch?v={video_id}", wait_until="domcontentloaded", timeout=30000
+            )
+            channel_link = page.locator(CHANNEL_LINK_SELECTOR).first
+            try:
+                await channel_link.wait_for(state="visible", timeout=10000)
+            except PlaywrightTimeoutError:
+                return {
+                    "ok": False,
+                    "error": "Could not find this video's channel link — "
+                    "YouTube's watch-page DOM may have changed.",
+                }
+            href = await channel_link.get_attribute("href")
+            if not href:
+                return {"ok": False, "error": "Channel link had no href."}
+            channel_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
+
+            await page.goto(channel_url, wait_until="domcontentloaded", timeout=30000)
+            sub_btn = page.locator(SUBSCRIBE_BUTTON_SELECTOR).first
+            try:
+                await sub_btn.wait_for(state="visible", timeout=10000)
+            except PlaywrightTimeoutError:
+                return {"ok": False, "error": "Could not find the subscribe button on the channel page."}
+
+            btn_text = ((await sub_btn.inner_text()) or "").strip().lower()
+            if "subscribed" not in btn_text:
+                return {"ok": True}  # already not subscribed, or button text differs — nothing to undo
+
+            await sub_btn.click()
+            try:
+                confirm_btn = page.locator(UNSUBSCRIBE_CONFIRM_SELECTOR).first
+                await confirm_btn.wait_for(state="visible", timeout=3000)
+                await confirm_btn.click()
+            except PlaywrightTimeoutError:
+                pass  # no confirmation dialog appeared — fine, not every account shows one
+
+            await page.wait_for_timeout(1500)
+            new_text = ((await sub_btn.inner_text()) or "").strip().lower()
+            return {"ok": "subscribed" not in new_text}
+        finally:
+            await page.close()

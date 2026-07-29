@@ -160,6 +160,49 @@
   .watch-toggle:hover { border-color: var(--cyan); color: var(--cyan); }
   .card.watched .watch-toggle { color: var(--text-dim); }
 
+  .labels-row {
+    /* display was missing entirely here — .labels-row was never actually a
+       flex container, so flex-wrap/justify-content/gap were all no-ops;
+       chips just wrapped as normal inline content (left-to-right), which
+       happened to look identical to flex-start so it went unnoticed until
+       #playerMark's override changed this to center and nothing moved.
+       Confirmed 2026-07-29. */
+    display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px;
+  }
+  .label-chip {
+    font-size: 13px; padding: 5px 11px; border-radius: 6px; cursor: pointer;
+    background: #201f26; border: 1px solid var(--line); color: var(--text-dim);
+    /* Without these, a chip shrinks below its text's natural width once the
+       row runs low on space (flex-shrink defaults to 1) and wraps its OWN
+       text across two lines instead of the whole chip wrapping to the next
+       row — confirmed 2026-07-29, "english learning" was splitting into
+       "english" / "learning" on separate lines instead of staying one pill. */
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .label-chip:hover { border-color: var(--cyan); color: var(--cyan); }
+  .label-chip.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; }
+  .label-chip.label-add { font-weight: 700; color: var(--text-dim); }
+  .label-chip.label-add:hover { border-color: var(--cyan); color: var(--cyan); }
+
+  .label-add-input {
+    font-size: 13px; padding: 5px 11px; border-radius: 6px; width: 140px;
+    background: #201f26; border: 1px solid var(--cyan); color: var(--text);
+    outline: none;
+  }
+  .label-add-input.hidden { display: none; }
+
+  .score-stars { display: flex; gap: 2px; }
+  .star {
+    background: none; border: none; padding: 0; cursor: pointer;
+    font-size: 14px; line-height: 1;
+    /* var(--line) (#25252b) on var(--panel) (#16161a) is near-zero contrast
+       — an unfilled star was effectively invisible, not just "dim".
+       Confirmed 2026-07-29. text-dim matches the visible-but-secondary
+       treatment already used for .user/.date text elsewhere in the UI. */
+    color: var(--text-dim);
+  }
+  .star:hover, .star.filled { color: var(--cyan); }
+
   #empty {
     display: none; text-align: center; padding: 80px 20px; color: var(--text-dim);
   }
@@ -208,7 +251,7 @@
   /* Video player modal */
   #playerOverlay {
     position: fixed; inset: 0; z-index: 60;
-    background: rgba(0,0,0,0.85);
+    background: rgba(0,0,0,0.97);
     display: none; align-items: center; justify-content: center;
     padding: 4px;
   }
@@ -217,6 +260,12 @@
     position: relative;
     display: flex; flex-direction: column; align-items: center; gap: 4px;
     width: fit-content; max-width: 99vw; max-height: 99vh;
+    /* A portrait (9:16) video renders much narrower than the marking
+       controls need — without a floor here, #playerMark's star-toggle +
+       score-stars row (nowrap) overflows past the card's right edge
+       instead of wrapping, since it has no independent width of its own to
+       fall back on. Confirmed 2026-07-29. */
+    min-width: min(94vw, 340px);
   }
   #speedBadge {
     position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
@@ -245,16 +294,68 @@
     width: min(94vw, 480px);
   }
   #playerFallback.show { display: block; }
-  #playerMeta { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; width: 100%; min-width: 280px; }
-  #playerMeta .title { font-size: 13px; -webkit-line-clamp: 3; min-height: 0; }
+  #playerFallback p { margin: 0 0 12px; }
+  #playerRefreshBtn { font-size: 12px; padding: 7px 14px; }
+  /* Width note applies to #playerTitleRow, #playerMeta, #playerMark, and
+     #playerFallback alike: a fixed `width` (not max-width, not
+     align-self:stretch):
+     - Not a percentage/stretch: #playerCard is width:fit-content, and a
+       flex-wrap row's contribution to an ancestor's fit-content size is its
+       UNWRAPPED max-content width (wrapping only kicks in once the
+       container's width is already otherwise constrained) — #playerMark's
+       label row has ~11 chips that, laid out on one line, come to ~945px,
+       so fit-content sized the whole modal to that even for a narrow
+       portrait video rendered at only ~534px. Confirmed 2026-07-29.
+     - Not max-width either: max-width lets a row shrink down to fit short
+       content, while #playerMark (driven by ~11 label chips) almost always
+       sits at the full cap — a short title produced a narrow, centered row
+       sitting above a much wider labels row, visibly misaligned. Confirmed
+       2026-07-29.
+     A fixed `width` forces every one of these rows to always match, so they
+     consistently line up and center correctly under #playerCard's own
+     align-items:center regardless of content length. */
+  #playerTitleRow {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+    width: min(90vw, 480px);
+    margin-bottom: 6px; /* moved above the video 2026-07-29 — was part of #playerMeta below it */
+  }
+  #playerTitleRow .title { font-size: 13px; -webkit-line-clamp: 3; min-height: 0; }
   #playerClose {
     background: transparent; border: 1px solid var(--line); color: var(--text);
     width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center; padding: 0;
   }
   #playerClose:hover { border-color: var(--coral); color: var(--coral); }
+  #playerMeta {
+    display: flex; flex-direction: column; gap: 2px;
+    width: min(90vw, 480px);
+  }
   #playerLink { font-size: 11.5px; color: var(--text-dim); }
   #playerLink a { color: var(--cyan); }
+  #playerDate { font-size: 11.5px; color: var(--text-dim); }
+  #playerUnfollowBtn {
+    font-size: 11px; padding: 4px 9px; border-radius: 6px;
+    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+    margin-left: auto; /* pushes it to the row's right edge, opposite the Star/score-stars on the left */
+  }
+  #playerUnfollowBtn:hover:not(:disabled) { border-color: var(--coral); color: var(--coral); }
+  #playerUnfollowBtn:disabled { opacity: 0.5; cursor: default; }
+
+  #playerMark {
+    display: flex; flex-direction: column; gap: 8px;
+    width: min(90vw, 480px); /* see #playerMeta's comment — fixed width so this always matches meta/fallback regardless of how many labels a video has */
+    padding-top: 10px; margin-top: 4px; border-top: 1px solid var(--line);
+  }
+  #playerMark .score-stars .star { font-size: 20px; }
+  #playerMark .labels-row { justify-content: center; }
+  #playerMark .row { justify-content: flex-start; gap: 14px; flex-wrap: wrap; }
+
+  #playerStarToggle {
+    font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+  }
+  #playerStarToggle:hover { border-color: var(--coral); color: var(--coral); }
+  #playerStarToggle.active { background: var(--coral); border-color: var(--coral); color: #0b0b0d; }
 
   #playerCard iframe {
     display: block; border: 0; background: #000;
@@ -282,8 +383,12 @@
     <option value="douyin">Douyin</option>
     <option value="youtube">YouTube</option>
   </select>
+  <select id="labelFilter">
+    <option value="">All labels</option>
+  </select>
   <label class="check"><input type="checkbox" id="unwatchedOnly" checked> Unwatched only</label>
   <label class="check"><input type="checkbox" id="showFiltered"> Show filtered (gym/drawing)</label>
+  <label class="check"><input type="checkbox" id="starredOnly"> Starred only</label>
   <span id="syncStatus"></span>
   <button id="backfillBtn" title="Fetch playable links for videos synced before in-page playback existed">Fix old links</button>
   <button class="primary" id="syncBtn">Sync Douyin</button>
@@ -320,16 +425,28 @@
 
 <div id="playerOverlay">
   <div id="playerCard">
+    <div id="playerTitleRow">
+      <div class="title" id="playerTitle"></div>
+      <button id="playerClose" aria-label="Close">✕</button>
+    </div>
     <span id="speedBadge"></span>
     <video id="playerVideo" controls autoplay playsinline></video>
     <iframe id="playerFrame" class="hidden" allow="autoplay; encrypted-media" allowfullscreen></iframe>
-    <div id="playerFallback">Playback isn't available for this video (it was synced before we started saving playable links) — open it on Douyin instead.</div>
+    <div id="playerFallback">
+      <p id="playerFallbackMsg">Playback isn't available right now — this can happen either because the video was synced before we started saving playable links, or because Douyin's saved link expired (its signed CDN URL is only valid for about a day).</p>
+      <button id="playerRefreshBtn">Refresh link</button>
+    </div>
     <div id="playerMeta">
-      <div>
-        <div class="title" id="playerTitle"></div>
-        <div id="playerLink"><a id="playerSourceLink" href="#" target="_blank" rel="noopener"></a></div>
+      <div id="playerDate"></div>
+      <div id="playerLink"><a id="playerSourceLink" href="#" target="_blank" rel="noopener"></a></div>
+    </div>
+    <div id="playerMark">
+      <div class="row">
+        <button id="playerStarToggle" title="Star for later review">☆ Star</button>
+        <span class="score-stars" id="playerStars"></span>
+        <button id="playerUnfollowBtn"></button>
       </div>
-      <button id="playerClose" aria-label="Close">✕</button>
+      <div class="labels-row" id="playerLabels"></div>
     </div>
   </div>
 </div>
@@ -341,6 +458,7 @@ const emptyMsg = document.getElementById('emptyMsg');
 const countLabel = document.getElementById('countLabel');
 const unwatchedOnly = document.getElementById('unwatchedOnly');
 const showFiltered = document.getElementById('showFiltered');
+const starredOnly = document.getElementById('starredOnly');
 const syncBtn = document.getElementById('syncBtn');
 const backfillBtn = document.getElementById('backfillBtn');
 const syncStatus = document.getElementById('syncStatus');
@@ -349,6 +467,7 @@ const qrWrap = document.getElementById('qrWrap');
 const busyOverlay = document.getElementById('busyOverlay');
 const busyText = document.getElementById('busyText');
 const platformFilter = document.getElementById('platformFilter');
+const labelFilter = document.getElementById('labelFilter');
 const ytLoginBtn = document.getElementById('ytLoginBtn');
 const ytSyncBtn = document.getElementById('ytSyncBtn');
 
@@ -366,17 +485,41 @@ const playerFrame = document.getElementById('playerFrame');
 const playerFallback = document.getElementById('playerFallback');
 const playerTitle = document.getElementById('playerTitle');
 const playerSourceLink = document.getElementById('playerSourceLink');
+const playerDate = document.getElementById('playerDate');
+const playerUnfollowBtn = document.getElementById('playerUnfollowBtn');
 const playerClose = document.getElementById('playerClose');
 const speedBadge = document.getElementById('speedBadge');
+const playerStars = document.getElementById('playerStars');
+const playerLabels = document.getElementById('playerLabels');
+const playerStarToggle = document.getElementById('playerStarToggle');
 
 let activeUser = '';
 let currentPlatform = null;
+let currentVideo = null;
 let ytPlaying = true;
+let ytSpeed = 1;
 
 function fmtDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Full date + relative age, for the player dialog — the grid's fmtDate
+// (month/day only) is compact enough for a card, but judging timeliness
+// benefits from both the exact date and an at-a-glance "how old is this".
+function fmtDateWithAge(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const full = d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+  let age;
+  if (days <= 0) age = 'today';
+  else if (days === 1) age = '1 day ago';
+  else if (days < 30) age = `${days} days ago`;
+  else if (days < 365) age = `${Math.floor(days / 30)} mo ago`;
+  else age = `${Math.floor(days / 365)} yr ago`;
+  return `${full} · ${age}`;
 }
 
 function escapeHtml(s) {
@@ -387,10 +530,14 @@ function escapeHtml(s) {
 
 function openPlayer(v) {
   playerTitle.textContent = v.title || '(untitled)';
+  playerDate.textContent = fmtDateWithAge(v.published_at);
   playerSourceLink.href = v.url;
   playerSourceLink.textContent = v.platform === 'youtube' ? 'Open on YouTube ↗' : 'Open on Douyin ↗';
+  playerUnfollowBtn.disabled = false;
+  playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe' : 'Unfollow';
   playerOverlay.classList.add('show');
   currentPlatform = v.platform;
+  currentVideo = v;
 
   if (v.platform === 'youtube') {
     // YouTube videos play via the official embed iframe — no CDN proxying
@@ -401,6 +548,7 @@ function openPlayer(v) {
     // in-player Space handler never fires; without postMessage control,
     // hitting Space here silently did nothing to the visible video.
     ytPlaying = true;
+    ytSpeed = 1;
     playerVideo.pause();
     playerVideo.removeAttribute('src');
     playerVideo.classList.add('hidden');
@@ -422,6 +570,75 @@ function openPlayer(v) {
     v.watched = true;
     toggleWatched(v.id, true);
   }
+
+  renderPlayerMark(v);
+}
+
+// Scoring/labeling/starring controls live in the player dialog (not the
+// grid card) — re-rendered fresh on each openPlayer() call since they
+// depend on which video is currently loaded. playerStarToggle itself is a
+// static element (its click listener is wired once, below, not here) —
+// only its label/active class needs updating per video.
+function renderPlayerMark(v) {
+  playerStarToggle.textContent = v.starred ? '★ Starred' : '☆ Star';
+  playerStarToggle.classList.toggle('active', !!v.starred);
+
+  playerStars.innerHTML = [1,2,3,4,5].map(n =>
+    `<button class="star${v.interest_score >= n ? ' filled' : ''}" data-score="${n}">★</button>`
+  ).join('');
+  playerStars.querySelectorAll('.star').forEach(starBtn => {
+    starBtn.addEventListener('click', () => {
+      const n = parseInt(starBtn.dataset.score, 10);
+      v.interest_score = v.interest_score === n ? null : n; // clicking the active score clears it
+      setScore(v.id, v.interest_score);
+      renderPlayerMark(v);
+    });
+  });
+
+  const activeLabels = v.labels || [];
+  // Union of the predefined categories and whatever's already on this video
+  // (covers custom labels added via "+" below, which aren't in
+  // allLabelCategories but must still show up as an active chip).
+  const chipLabels = [...new Set([...allLabelCategories, ...activeLabels])];
+  playerLabels.innerHTML = chipLabels.map(label =>
+    `<span class="label-chip${activeLabels.includes(label) ? ' active' : ''}" data-label="${escapeHtml(label)}">${escapeHtml(label.replace(/_/g, ' '))}</span>`
+  ).join('') + `
+    <button class="label-chip label-add" id="labelAddBtn" type="button">+</button>
+    <input class="label-add-input hidden" id="labelAddInput" placeholder="new label" maxlength="30">
+  `;
+  playerLabels.querySelectorAll('.label-chip:not(.label-add)').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const label = chip.dataset.label;
+      const labels = v.labels || (v.labels = []);
+      const idx = labels.indexOf(label);
+      if (idx === -1) labels.push(label); else labels.splice(idx, 1);
+      setLabels(v.id, labels);
+      renderPlayerMark(v);
+    });
+  });
+
+  const addBtn = document.getElementById('labelAddBtn');
+  const addInput = document.getElementById('labelAddInput');
+  addBtn.addEventListener('click', () => {
+    addBtn.classList.add('hidden');
+    addInput.classList.remove('hidden');
+    addInput.focus();
+  });
+  addInput.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // don't let the grid's vim-style shortcuts eat these keystrokes
+    if (e.key === 'Enter') {
+      const label = addInput.value.trim();
+      const labels = v.labels || (v.labels = []);
+      if (label && !labels.some(l => l.toLowerCase() === label.toLowerCase())) {
+        labels.push(label);
+        setLabels(v.id, labels);
+      }
+      renderPlayerMark(v);
+    } else if (e.key === 'Escape') {
+      renderPlayerMark(v);
+    }
+  });
+  addInput.addEventListener('blur', () => renderPlayerMark(v));
 }
 
 playerVideo.addEventListener('loadedmetadata', () => {
@@ -443,9 +660,21 @@ const SPEED_MAX = 3;
 let speedBadgeTimer = null;
 
 function nudgeSpeed(delta) {
-  const next = Math.round((playerVideo.playbackRate + delta) * 100) / 100;
-  playerVideo.playbackRate = Math.min(SPEED_MAX, Math.max(SPEED_MIN, next));
-  const rate = playerVideo.playbackRate;
+  let rate;
+  if (currentPlatform === 'youtube') {
+    // The iframe's actual <video> is never reachable from our document (cross-
+    // origin), so unlike Douyin's playerVideo.playbackRate, this can't read
+    // the real current rate back — same optimistic-tracking approach as
+    // ytPlaying, driven entirely by our own postMessage commands.
+    ytSpeed = Math.round((ytSpeed + delta) * 100) / 100;
+    ytSpeed = Math.min(SPEED_MAX, Math.max(SPEED_MIN, ytSpeed));
+    ytCommand('setPlaybackRate', [ytSpeed]);
+    rate = ytSpeed;
+  } else {
+    const next = Math.round((playerVideo.playbackRate + delta) * 100) / 100;
+    playerVideo.playbackRate = Math.min(SPEED_MAX, Math.max(SPEED_MIN, next));
+    rate = playerVideo.playbackRate;
+  }
   showBadge((rate % 1 === 0 ? rate.toFixed(0) : rate.toFixed(2)) + '×');
 }
 
@@ -469,6 +698,31 @@ playerVideo.addEventListener('error', () => {
   playerFallback.classList.add('show');
 });
 
+const playerRefreshBtn = document.getElementById('playerRefreshBtn');
+const playerFallbackMsg = document.getElementById('playerFallbackMsg');
+
+playerRefreshBtn.addEventListener('click', async () => {
+  if (!currentVideo) return;
+  playerRefreshBtn.disabled = true;
+  playerRefreshBtn.textContent = 'Refreshing…';
+  try {
+    const res = await fetch(`/api/videos/${currentVideo.id}/refresh_play_url`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      playerFallback.classList.remove('show');
+      playerVideo.classList.remove('hidden');
+      playerVideo.src = `/api/play/${currentVideo.id}`;
+    } else {
+      playerFallbackMsg.textContent = data.error
+        ? `Couldn't refresh: ${data.error}`
+        : "Couldn't find a playable link for this video — it may have been deleted, or you may need to log in to Douyin again.";
+    }
+  } finally {
+    playerRefreshBtn.disabled = false;
+    playerRefreshBtn.textContent = 'Refresh link';
+  }
+});
+
 function closePlayer() {
   playerOverlay.classList.remove('show');
   playerVideo.pause();
@@ -480,9 +734,9 @@ function closePlayer() {
 playerClose.addEventListener('click', closePlayer);
 playerOverlay.addEventListener('click', (e) => { if (e.target === playerOverlay) closePlayer(); });
 
-function ytCommand(func) {
+function ytCommand(func, args = []) {
   playerFrame.contentWindow.postMessage(
-    JSON.stringify({ event: 'command', func, args: [] }), 'https://www.youtube.com'
+    JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com'
   );
 }
 
@@ -525,6 +779,17 @@ function markFirstNWatched(n) {
   syncStatus.textContent = `Marked ${targets.length} watched`;
 }
 
+// "<N>i" (N = 1-5) scores the first visible video N — unlike "<N>m" (count
+// prefix = how many videos), here the digit IS the score of a single video.
+// Bare "i" with no digit buffered is a no-op: there's no sensible default score.
+function scoreFirstVideo(score) {
+  if (currentVideos.length === 0 || score < 1 || score > 5) return;
+  const v = currentVideos[0];
+  v.interest_score = score;
+  setScore(v.id, score);
+  syncStatus.textContent = `Scored "${v.title.slice(0, 30)}…" ${score}★`;
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closePlayer(); return; }
 
@@ -554,6 +819,10 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'm' || e.key === 'M') {
     e.preventDefault();
     markFirstNWatched(keyCountBuffer ? parseInt(keyCountBuffer, 10) : 1);
+    resetKeyCountBuffer();
+  } else if ((e.key === 'i' || e.key === 'I') && keyCountBuffer) {
+    e.preventDefault();
+    scoreFirstVideo(parseInt(keyCountBuffer, 10));
     resetKeyCountBuffer();
   } else {
     resetKeyCountBuffer();
@@ -595,6 +864,75 @@ function card(v) {
   el.querySelector('.user').addEventListener('click', () => selectCreator(v.user));
   return el;
 }
+
+async function setScore(id, score) {
+  await fetch(`/api/videos/${id}/score`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ score }),
+  });
+}
+
+async function setLabels(id, labels) {
+  await fetch(`/api/videos/${id}/labels`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ labels }),
+  });
+}
+
+async function setStarred(id, starred) {
+  await fetch(`/api/videos/${id}/starred`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ starred }),
+  });
+}
+
+// Wired once (unlike the score/label chips, which are rebuilt via innerHTML
+// on every renderPlayerMark call) since playerStarToggle is a static element.
+playerStarToggle.addEventListener('click', () => {
+  if (!currentVideo) return;
+  currentVideo.starred = !currentVideo.starred;
+  setStarred(currentVideo.id, currentVideo.starred);
+  renderPlayerMark(currentVideo);
+});
+
+// Real, hard-to-reverse action on the live Douyin/YouTube account — not
+// just a local DB change (see /api/videos/{id}/unfollow_creator). Confirm
+// first, and be honest in the status text about failure (selector drift is
+// a real risk here, per the UNVERIFIED note on the backend functions).
+playerUnfollowBtn.addEventListener('click', async () => {
+  if (!currentVideo) return;
+  const v = currentVideo;
+  const platformLabel = v.platform === 'youtube' ? 'YouTube' : 'Douyin';
+  const actionLabel = v.platform === 'youtube' ? 'unsubscribe from' : 'unfollow';
+  const ok = confirm(
+    `Really ${actionLabel} ${v.user || 'this creator'} on ${platformLabel}? ` +
+    `This changes your actual ${platformLabel} account, not just this app.`
+  );
+  if (!ok) return;
+
+  playerUnfollowBtn.disabled = true;
+  playerUnfollowBtn.textContent = 'Working…';
+  try {
+    const res = await fetch(`/api/videos/${v.id}/unfollow_creator`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      syncStatus.textContent = `${v.platform === 'youtube' ? 'Unsubscribed from' : 'Unfollowed'} ${v.user}`;
+      playerUnfollowBtn.textContent = 'Done';
+      loadCreators();
+    } else {
+      syncStatus.textContent = data.error || 'Could not complete this — try again, or do it manually on the site.';
+      playerUnfollowBtn.disabled = false;
+      playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe' : 'Unfollow';
+    }
+  } catch (err) {
+    syncStatus.textContent = 'Request failed — try again.';
+    playerUnfollowBtn.disabled = false;
+    playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe' : 'Unfollow';
+  }
+});
 
 function updateCardInPlace(id, watched) {
   const cardEl = grid.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
@@ -691,6 +1029,8 @@ async function loadCreators() {
 }
 
 let currentVideos = [];
+let labelFilterPopulated = false;
+let allLabelCategories = [];
 
 async function loadVideos() {
   const params = new URLSearchParams();
@@ -698,10 +1038,23 @@ async function loadVideos() {
   if (showFiltered.checked) params.set('show_filtered', 'true');
   if (activeUser) params.set('user', activeUser);
   if (platformFilter.value) params.set('platform', platformFilter.value);
+  if (labelFilter.value) params.set('label', labelFilter.value);
+  if (starredOnly.checked) params.set('starred', 'true');
 
   const res = await fetch('/api/videos?' + params.toString());
   const data = await res.json();
   currentVideos = data.videos;
+
+  if (!labelFilterPopulated && data.label_categories) {
+    labelFilterPopulated = true;
+    allLabelCategories = data.label_categories;
+    data.label_categories.forEach(label => {
+      const opt = document.createElement('option');
+      opt.value = label;
+      opt.textContent = label.replace(/_/g, ' ');
+      labelFilter.appendChild(opt);
+    });
+  }
 
   grid.innerHTML = '';
   if (data.videos.length === 0) {
@@ -862,7 +1215,9 @@ async function initYoutubeStatus() {
 
 unwatchedOnly.addEventListener('change', loadVideos);
 showFiltered.addEventListener('change', loadVideos);
+starredOnly.addEventListener('change', loadVideos);
 platformFilter.addEventListener('change', () => { loadVideos(); loadCreators(); });
+labelFilter.addEventListener('change', loadVideos);
 syncBtn.addEventListener('click', runSync);
 backfillBtn.addEventListener('click', runBackfill);
 ytLoginBtn.addEventListener('click', startYoutubeLogin);

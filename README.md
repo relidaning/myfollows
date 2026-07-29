@@ -162,10 +162,16 @@ Code chat session.
 | `GET /api/youtube/status` | Same as `youtube_login_status`/poll — `{logged_in, in_progress}` |
 | `POST /api/youtube/login/start` | Same as `youtube_login_start` — returns `{status: "window_opened"}` |
 | `POST /api/youtube/sync?limit=30` | Same as `youtube_sync_feed` |
-| `GET /api/videos?watched=false&show_filtered=false&user=&platform=` | List videos (JSON), filterable by watched state, creator, and now `platform` (`douyin`/`youtube`) |
+| `GET /api/videos?watched=false&show_filtered=false&user=&platform=&label=&starred=` | List videos (JSON), filterable by watched state, creator, `platform` (`douyin`/`youtube`), `label` (one of `label_categories` in the response), and `starred=true`. Each video includes `interest_score` (1-5 or null), `labels` (array), and `starred` (bool) |
 | `POST /api/videos/{id}/watched` | Body `{"watched": true\|false}` |
+| `POST /api/videos/{id}/score` | Body `{"score": 1-5\|null}` — subjective, always user-set, never inferred |
+| `POST /api/videos/{id}/labels` | Body `{"labels": ["ai_tech", ...]}` — manual override of auto-classified labels |
+| `POST /api/videos/{id}/starred` | Body `{"starred": true\|false}` — plain bookmark flag, independent of watched/score, for a later review pass |
+| `POST /api/labels/backfill` | Re-runs the keyword classifier (see "Interest labels" below) over every row, overwriting any manual label edits |
 | `GET /api/creators?platform=` | Creators (name, avatar, unread/unwatched counts) for the sidebar, optionally filtered by platform |
 | `GET /api/play/{id}` | Proxies a **Douyin** video's actual playable stream (see below) — YouTube videos instead play via the official `youtube.com/embed/{id}` iframe, no proxying needed |
+| `POST /api/videos/{id}/refresh_play_url` | Re-fetches this one video's `play_url` even if already populated — for a 403 caused by an *expired* signed CDN URL, not a missing one (see gotcha below); `/api/backfill` only targets rows where `play_url` is empty |
+| `POST /api/videos/{id}/unfollow_creator` | Unfollows (Douyin) / unsubscribes (YouTube) from this video's creator — a real, hard-to-reverse action on the live account, see "Unfollowing/unsubscribing" below |
 
 ## Keyboard shortcuts (ui.html)
 
@@ -174,6 +180,11 @@ Grid (player closed):
 - `m` — mark the first video watched; `<N>m` (e.g. `5m`, vim-style count
   prefix) marks the first N. Digit buffer resets after 1.5s or any
   non-digit/non-m key.
+- `<N>i` (N = 1-5, e.g. `3i`) — sets the **first** video's interest score to
+  N. Unlike `<N>m`, the digit here is the score itself, not a count — bare
+  `i` with no digit buffered does nothing (no sensible default score).
+  Clicking a star on a card directly, or clicking the same score again,
+  toggles it back to unscored.
 
 Player (open):
 - `Space` — pause/resume
@@ -218,6 +229,39 @@ from the 9:16 placeholder again. If you ever add a new `aspect-ratio`
 placeholder anywhere in this UI, it needs the same real-dimensions-override
 pairing or it will have this exact bug.
 
+**`#playerMark`/`#playerMeta` need an explicit `max-width`, not `width:100%`
+or `align-self:stretch` — confirmed 2026-07-29 on a portrait (9:16) Douyin
+video.** `#playerCard` is `width: fit-content`, and a flex-wrap row's
+contribution to an ancestor's fit-content size is its *unwrapped*
+max-content width — wrapping only kicks in once the container's width is
+already constrained some other way. The label row has ~11 chips that, laid
+out on one line, come to ~945px, so fit-content sized the whole modal to
+that even when the actual video rendered at only ~534px wide — the video
+looked squeezed into a narrow column while the marking controls below it
+spilled out past its edges. `align-self:stretch` looked like a fix (matches
+the container's resolved width instead of computing its own) but actually
+made it worse in a different way: it fills from the flex start edge, so
+under a *wide* landscape video the row would hug the left side instead of
+sitting centered like the video above it. The actual fix is a plain
+`max-width: min(90vw, 480px)` on both — that caps their own contribution to
+`#playerCard`'s fit-content calculation (so labels wrap like they're
+supposed to) while leaving `#playerCard`'s own `align-items: center` to
+center them normally under videos of any aspect ratio.
+
+**`.label-chip` needs `white-space: nowrap; flex-shrink: 0;`, and `.star`
+needs `color: var(--text-dim)` not `var(--line)` — confirmed 2026-07-29,
+both shipped visually broken in the same round as the max-width fix
+above.** Without `flex-shrink:0`, a chip shrinks below its own text's width
+once the row runs low on space (flex-shrink defaults to 1), and the text
+wraps *inside* the chip instead of the whole chip wrapping to the next row
+— "english learning" was rendering as "english" / "learning" stacked on
+two lines rather than staying one pill. Separately, unfilled score stars
+used `var(--line)` (`#25252b`) on `var(--panel)` (`#16161a`) — those two
+colors are close enough to be effectively invisible, not just "dim"; an
+unscored video's star row looked like it wasn't rendering at all. Fixed by
+matching the visible-but-secondary treatment already used for `.user`/
+`.date` elsewhere (`var(--text-dim)`).
+
 ## Content filters
 
 Videos primarily about these topics are auto-tagged and hidden from the
@@ -230,6 +274,107 @@ in `server.py` (title+content, case-insensitive) — deterministic, since
 sync happens from the UI's "Sync now" button, not via per-video LLM
 judgment. When adding/removing a category, edit `FILTER_CATEGORIES` and
 rebuild (`docker compose up -d --build`).
+
+## Interest labels + score (added 2026-07-29)
+
+Separate from content filters (which hide things) — these are informational
+tags to help mark and later get recommendations from unwatched videos, not
+run at recommendation time by any LLM/model in the container.
+
+- **`labels`** (`videos.labels`, comma-string in the DB / array over the
+  API) — auto-assigned at sync time by `_classify_labels` /
+  `LABEL_CATEGORIES` in `common.py`, a keyword match like `_classify_filter`
+  but **not** mutually exclusive (a video can match several categories) and
+  informational only (nothing is hidden). Current categories: `ai_tech`,
+  `programming`, `english_learning`, `psychology`, `relationships`,
+  `financial`, `math_science`, `explainer`, `fitness`, `news`, `relaxation`
+  — chosen from what actually showed up in this feed, not a generic guess
+  (`relationships` in particular was added after the first backfill showed
+  an 11-video NPD/toxic-relationship cluster that didn't fit anywhere else);
+  edit
+  `LABEL_CATEGORIES` and call `POST /api/labels/backfill` to reclassify
+  existing rows after changing keywords (no rebuild needed for a backfill,
+  but a keyword *edit* to `common.py` does need
+  `docker compose up -d --build` first).
+- **`interest_score`** (`videos.interest_score`, 1-5 or null) — purely
+  subjective, always set by hand, never inferred from content. This is the
+  signal a recommendation pass (currently done ad hoc, not an in-app
+  feature) uses alongside labels to rank unwatched videos.
+
+**Marking UI lives in the player dialog, not the grid card** (moved there
+2026-07-29): opening a video (`openPlayer`) renders a star row and a full
+row of label chips below the title (`#playerMark` in `ui.html`,
+`renderPlayerMark()`), so you mark interest while actually watching instead
+of guessing from a thumbnail. Stars set `interest_score` (clicking the
+already-active star clears it back to null); label chips show *every*
+category (not just the auto-assigned ones) and toggle membership on click,
+calling `POST /api/videos/{id}/labels` with the full updated array each
+time — this is a manual override of the auto-classifier for that one video,
+per the backfill note above. The `<N>i` grid-level shortcut (N=1-5, scores
+the first visible video without opening the player) still works too.
+
+A trailing **`+` chip** opens an inline text input (Enter to add, Escape/
+blur to cancel) for one-off custom labels that aren't in
+`LABEL_CATEGORIES` at all — e.g. tagging a specific video "must watch
+twice" without adding a whole new global category for it. Custom labels
+just live in that video's `labels` string like any other; `renderPlayerMark`
+renders the *union* of `LABEL_CATEGORIES` and whatever's already on the
+video specifically so a custom label still shows as an active chip on
+reopen, even though it'll never appear in the top-bar label filter
+dropdown (that's populated from `label_categories`, the static predefined
+list only).
+
+## Starring videos for later review (added 2026-07-29)
+
+A third, separate marking dimension from score/labels: **`starred`**
+(`videos.starred`, plain 0/1) — a bookmark flag with no scale and no
+content classification, just "come back to this." Toggled via the
+`☆ Star` / `★ Starred` button in the player dialog (`#playerStarToggle`,
+top of `#playerMark`, next to the score stars) — wired once as a static
+listener rather than rebuilt per `renderPlayerMark()` call like the score/
+label controls, since it doesn't need to regenerate a chip list. A
+**"Starred only"** checkbox in the header (next to "Show filtered") passes
+`starred=true` to `GET /api/videos`, independent of the "Unwatched only"
+checkbox — so a starred video stays easy to find in a later review pass
+even after you've already watched it and it would otherwise have dropped
+out of the default unwatched-only view.
+
+## Unfollowing/unsubscribing from the player dialog (added 2026-07-29)
+
+An `Unfollow` (Douyin) / `Unsubscribe` (YouTube) button sits under the
+title in the player dialog (`#playerUnfollowBtn`). Unlike every other
+marking feature in this doc, **this performs a real action on your actual
+live Douyin/YouTube account** — not a local DB change — so the UI confirms
+via a native `confirm()` dialog before firing the request, and the button
+shows `Working…` while the Playwright automation runs (several seconds,
+same order of magnitude as a login/sync).
+
+**We don't store a stable per-creator profile ID.** Douyin's follow
+sidebar (`_scrape_creators`) and YouTube's subscriptions feed
+(`_scrape_subscriptions`) both only ever capture a display name — no
+href/user-id/channel-id — so there's no stored link to jump straight to a
+creator's profile. Both `_unfollow_douyin_creator` (server.py) and
+`unsubscribe` (youtube.py) work around this by resolving the creator fresh
+from the specific video you're watching: Douyin visits the video's own
+page and reads `author.sec_uid` out of the intercepted `aweme/detail`
+response (same technique as `_refetch_play_url`); YouTube opens the
+video's watch page and follows its channel link. On success, the creator's
+row is deleted from the local `creators` table (so they drop out of the
+sidebar immediately) — already-synced videos from them are left alone,
+since unfollowing undoes the *relationship*, not video history.
+
+**Both are UNVERIFIED against a live logged-in session as of 2026-07-29** —
+written from typical/documented DOM patterns, not confirmed against
+Douyin's or YouTube's actual current markup (unlike e.g. `QR_SELECTOR`,
+which was reverse-engineered from a real devtools session). Both functions
+verify their own success — checking that the follow/subscribe button
+actually changed state afterward — and report `{"ok": false, "error": ...}`
+honestly rather than assuming a click that didn't error means it worked. If
+one reports failure (or silently does nothing), that's the first place to
+check: inspect a real followed-creator profile / subscribed-channel page
+with devtools and update `DOUYIN_FOLLOWED_BUTTON_SELECTOR`/
+`DOUYIN_UNFOLLOW_CONFIRM_SELECTOR` in `server.py` or `CHANNEL_LINK_SELECTOR`/
+`SUBSCRIBE_BUTTON_SELECTOR`/`UNSUBSCRIBE_CONFIRM_SELECTOR` in `youtube.py`.
 
 ## How the feed sync actually works (read before touching `server.py`)
 
@@ -285,6 +430,19 @@ Confirmed 2026-07-28, don't relitigate without checking devtools first:
   before this existed have no `play_url`; the UI shows a fallback message
   + "Open on Douyin" link rather than a dead black video box (check
   `#playerFallback` in `ui.html` before assuming a playback bug is new).
+- **Douyin's `play_url` is a short-lived signed URL, not a stable
+  link — confirmed 2026-07-29.** It carries a `dy_q` unix-timestamp query
+  param that expires roughly a day after the video was synced/backfilled;
+  `/api/play/{id}` 403s once that passes even though `play_url` is
+  populated (not null/empty), which is a *different* failure than the
+  "never had a play_url" case above but the player's `error` event handler
+  can't distinguish them client-side — both show the same `#playerFallback`
+  message. `/api/backfill` (targets rows with no `play_url` at all) doesn't
+  help here since the row already has one, just a stale one; use
+  `/api/videos/{id}/refresh_play_url` instead, which always re-fetches
+  regardless of the current value (wired to a "Refresh link" button in the
+  fallback UI). There's no long-term fix for this short of resyncing more
+  aggressively — it's inherent to how Douyin signs its CDN URLs.
 - **SQLite schema changes need an explicit migration.** `CREATE TABLE IF
   NOT EXISTS` does not add columns to an already-existing table — adding
   `play_url` without an `ALTER TABLE ... ADD COLUMN` migration in `_db()`

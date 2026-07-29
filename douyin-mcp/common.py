@@ -21,6 +21,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 _VIDEO_COLUMNS = [
     "id", "platform", "url", "title", "user", "published_at", "content",
     "thumbnail_url", "play_url", "filtered_category", "watched", "fetched_at",
+    "interest_score", "labels", "starred",
 ]
 
 # Content filters (user preference, 2026-07-28): hide videos primarily about
@@ -43,6 +44,44 @@ def _classify_filter(title: str, content: str) -> Optional[str]:
     return None
 
 
+# Interest labels (user preference, 2026-07-29): unlike FILTER_CATEGORIES
+# these don't hide anything — they're informational tags used to mark and
+# later recommend videos. A video can match multiple categories (unlike
+# _classify_filter's single-category early-return), so this returns a list.
+LABEL_CATEGORIES: dict[str, list[str]] = {
+    "ai_tech": ["人工智能", "大模型", "大语言模型", "chatgpt", "claude", "gpt-", "llm",
+                "transformer", " ai ", "#ai", "ai泡沫", "ai agent", "科技新闻"],
+    "programming": ["前端", "后端", "程序员", "算法", "leetcode", "数据结构", "编程",
+                    "javascript", "python", " java", "代码", "开发工程师",
+                    "postgres", "devops", "code review", "database", "software engineer"],
+    "english_learning": ["英语", "雅思", "口语", "听力", "语法", "外教", "english learning",
+                         "ielts", "b1 listening", "vocabulary"],
+    "psychology": ["认知", "思维", "人生感悟", "心理", "情绪", "拖延", "自我提升", "本质"],
+    "relationships": ["npd", "自恋型人格障碍", "有毒关系", "亲密关系", "回避型",
+                      "toxic relationship", "narcissist"],
+    "financial": ["股票", "财经", "经济", "债务", "投资", "基金", "通胀", "gdp",
+                  "stock market", "economy", "隐性债务", "理财", "收入划分", "月入"],
+    "math_science": ["数学", "数学思维", "科普", "物理", "化学", "天文学", "猜想", "math",
+                     "science", "physics"],
+    "explainer": ["讲解", "解读", "拆解", "原理", "是如何工作的", "how it works", "explained",
+                  "深度解析", "全预览"],
+    "fitness": ["hiit", "燃脂", "腹肌", "腹部训练", "核心力量", "瘦腰", "暴汗", "站立训练",
+                "有氧运动"],
+    "news": ["国际局势", "美军", "战争", "空袭", "反击", "military", "breaking news"],
+    "relaxation": ["白噪音", "助眠", "雨声", "催眠", "解压", "white noise", "rain sounds",
+                   "insomnia"],
+}
+
+
+def _classify_labels(title: str, content: str) -> list[str]:
+    text = f"{title} {content}".lower()
+    return [
+        category
+        for category, keywords in LABEL_CATEGORIES.items()
+        if any(kw.lower() in text for kw in keywords)
+    ]
+
+
 def _db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -59,7 +98,10 @@ def _db() -> sqlite3.Connection:
             play_url TEXT,
             filtered_category TEXT,
             watched INTEGER NOT NULL DEFAULT 0,
-            fetched_at TEXT
+            fetched_at TEXT,
+            interest_score INTEGER,
+            labels TEXT,
+            starred INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -82,6 +124,12 @@ def _db() -> sqlite3.Connection:
         conn.execute("ALTER TABLE videos ADD COLUMN play_url TEXT")
     if "platform" not in video_cols:
         conn.execute("ALTER TABLE videos ADD COLUMN platform TEXT NOT NULL DEFAULT 'douyin'")
+    if "interest_score" not in video_cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN interest_score INTEGER")
+    if "labels" not in video_cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN labels TEXT")
+    if "starred" not in video_cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
 
     creator_cols = {row[1] for row in conn.execute("PRAGMA table_info(creators)")}
     if "platform" not in creator_cols:
@@ -130,16 +178,17 @@ def upsert_videos(videos: list[dict], platform: str) -> tuple[int, int]:
     now = datetime.datetime.now().isoformat(timespec="seconds")
     for v in videos:
         category = _classify_filter(v.get("title", ""), v.get("content", ""))
+        labels = ",".join(_classify_labels(v.get("title", ""), v.get("content", "")))
         conn.execute(
             "INSERT INTO videos "
-            "(id, platform, url, title, user, published_at, content, thumbnail_url, play_url, filtered_category, watched, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?) "
+            "(id, platform, url, title, user, published_at, content, thumbnail_url, play_url, filtered_category, watched, fetched_at, labels) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET "
             "play_url = COALESCE(NULLIF(excluded.play_url, ''), play_url), "
             "thumbnail_url = COALESCE(NULLIF(excluded.thumbnail_url, ''), thumbnail_url)",
             (
                 v["id"], platform, v["url"], v["title"], v["user"], v["published_at"],
-                v["content"], v.get("thumbnail_url", ""), v.get("play_url", ""), category, now,
+                v["content"], v.get("thumbnail_url", ""), v.get("play_url", ""), category, now, labels,
             ),
         )
     conn.commit()

@@ -32,7 +32,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Respon
 
 import common
 import youtube
-from common import QR_IMAGE_PATH, _VIDEO_COLUMNS, _db
+from common import LABEL_CATEGORIES, QR_IMAGE_PATH, _VIDEO_COLUMNS, _classify_labels, _db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -462,17 +462,66 @@ async def _run_sync(limit: int) -> dict:
     }
 
 
+async def _refetch_play_url(page, video_id: str) -> bool:
+    """Visits one video's own page (douyin.com/video/{id}), which triggers
+    Douyin's aweme/detail API with full video data including play_addr, and
+    writes it straight to that row — always overwrites, regardless of the
+    row's current play_url. Shared by both _backfill_play_urls (rows that
+    never got one) and _refresh_play_url (a row whose play_url is populated
+    but its signed CDN token has since expired)."""
+    detail = {}
+
+    async def on_response(resp, _store=detail):
+        if "aweme/detail" in resp.url:
+            try:
+                _store["body"] = await resp.json()
+            except Exception:
+                pass
+
+    page.on("response", on_response)
+    try:
+        await page.goto(
+            f"https://www.douyin.com/video/{video_id}",
+            wait_until="domcontentloaded",
+            timeout=20000,
+        )
+        await page.wait_for_timeout(2500)
+    except PlaywrightTimeoutError:
+        pass
+    finally:
+        page.remove_listener("response", on_response)
+
+    body = detail.get("body")
+    aweme = (body or {}).get("aweme_detail") if body else None
+    if not aweme:
+        return False
+    video_obj = aweme.get("video") or {}
+    play_list = (video_obj.get("play_addr_h264") or video_obj.get("play_addr") or {}).get("url_list") or []
+    cover_list = (video_obj.get("cover") or {}).get("url_list") or []
+    if not play_list:
+        return False
+    conn = _db()
+    conn.execute(
+        "UPDATE videos SET play_url = ?, "
+        "thumbnail_url = COALESCE(NULLIF(thumbnail_url, ''), ?) "
+        "WHERE id = ?",
+        (play_list[0], cover_list[0] if cover_list else "", video_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
 async def _backfill_play_urls(limit: int = 50) -> dict:
     """Fill in play_url for rows synced before that field existed.
 
     Confirmed 2026-07-28: `_run_sync`'s INSERT...ON CONFLICT backfill only
     fires opportunistically if a video happens to resurface in a future
     (non-deterministic) feed sync — most old rows never get one. This
-    instead visits each missing video's own page directly
-    (douyin.com/video/{id}), which triggers Douyin's aweme/detail API with
-    full video data including play_addr, and writes it straight to that row.
-    Slower than a feed sync (one page load per video, ~2-3s each) — capped
-    by `limit` per call, safe to call repeatedly until none remain.
+    instead visits each missing video's own page directly via
+    _refetch_play_url. Slower than a feed sync (one page load per video,
+    ~2-3s each) — capped by `limit` per call, safe to call repeatedly until
+    none remain.
     """
     if not os.path.exists(STORAGE_STATE_PATH):
         return {"error": "Not logged in."}
@@ -491,47 +540,8 @@ async def _backfill_play_urls(limit: int = 50) -> dict:
         page = await ctx.new_page()
         try:
             for (video_id,) in rows:
-                detail = {}
-
-                async def on_response(resp, _store=detail):
-                    if "aweme/detail" in resp.url:
-                        try:
-                            _store["body"] = await resp.json()
-                        except Exception:
-                            pass
-
-                page.on("response", on_response)
-                try:
-                    await page.goto(
-                        f"https://www.douyin.com/video/{video_id}",
-                        wait_until="domcontentloaded",
-                        timeout=20000,
-                    )
-                    await page.wait_for_timeout(2500)
-                except PlaywrightTimeoutError:
-                    pass
-                finally:
-                    page.remove_listener("response", on_response)
-
-                body = detail.get("body")
-                aweme = (body or {}).get("aweme_detail") if body else None
-                if aweme:
-                    video_obj = aweme.get("video") or {}
-                    play_list = (
-                        (video_obj.get("play_addr_h264") or video_obj.get("play_addr") or {}).get("url_list") or []
-                    )
-                    cover_list = (video_obj.get("cover") or {}).get("url_list") or []
-                    if play_list:
-                        conn = _db()
-                        conn.execute(
-                            "UPDATE videos SET play_url = ?, "
-                            "thumbnail_url = COALESCE(NULLIF(thumbnail_url, ''), ?) "
-                            "WHERE id = ?",
-                            (play_list[0], cover_list[0] if cover_list else "", video_id),
-                        )
-                        conn.commit()
-                        conn.close()
-                        updated += 1
+                if await _refetch_play_url(page, video_id):
+                    updated += 1
         finally:
             await page.close()
 
@@ -541,6 +551,119 @@ async def _backfill_play_urls(limit: int = 50) -> dict:
     ).fetchone()[0]
     conn.close()
     return {"attempted": len(rows), "updated": updated, "remaining": remaining}
+
+
+async def _refresh_play_url(video_id: str) -> dict:
+    """Re-fetches a single video's play_url regardless of its current
+    value — unlike _backfill_play_urls (which only targets rows that never
+    got one), this is for a video whose signed CDN URL has since expired.
+
+    Confirmed 2026-07-29: Douyin's play_addr URLs carry a short-lived signed
+    token (~1 day, a `dy_q` unix-timestamp query param) — /api/play/{id}
+    403s once that passes even though play_url is populated, which is a
+    different failure mode than "never had a play_url" but the player's
+    generic error handler couldn't previously tell them apart.
+    """
+    if not os.path.exists(STORAGE_STATE_PATH):
+        return {"error": "Not logged in."}
+    async with _lock:
+        ctx = await _get_context(fresh=False)
+        page = await ctx.new_page()
+        try:
+            ok = await _refetch_play_url(page, video_id)
+        finally:
+            await page.close()
+    return {"ok": ok}
+
+
+# Best-effort — the follow button's text ("已关注") is used instead of a CSS
+# class since Douyin's class names are build-hashed and unstable across
+# deploys (see QR_SELECTOR's docstring for the same caveat); text content is
+# more likely to survive a redesign, though still not guaranteed. UNVERIFIED
+# against a live session at write time (2026-07-29) — if unfollowing
+# silently reports failure, inspect a real followed creator's profile page
+# with devtools and update these.
+DOUYIN_FOLLOWED_BUTTON_SELECTOR = "button:has-text('已关注')"
+DOUYIN_UNFOLLOW_CONFIRM_SELECTOR = "button:has-text('确定'), button:has-text('确认')"
+
+
+async def _unfollow_douyin_creator(video_id: str) -> dict:
+    """Unfollows this video's creator on Douyin — a real, hard-to-reverse
+    action on the live account, not just a local DB change.
+
+    We don't store a stable profile id for Douyin creators (the follow
+    sidebar in _scrape_creators only ever captures a display name, no
+    href/user-id — see its docstring), so this resolves the creator fresh
+    from the video itself: visits the video's own page to intercept the
+    aweme/detail response (same technique as _refetch_play_url) and reads
+    author.sec_uid out of it, then navigates to that profile and clicks the
+    real unfollow button. Reports {"ok": false} honestly (rather than
+    assuming success from a click not erroring) if the button never
+    disappears afterward.
+    """
+    if not os.path.exists(STORAGE_STATE_PATH):
+        return {"ok": False, "error": "Not logged in."}
+
+    async with _lock:
+        ctx = await _get_context(fresh=False)
+        page = await ctx.new_page()
+        try:
+            detail = {}
+
+            async def on_response(resp, _store=detail):
+                if "aweme/detail" in resp.url:
+                    try:
+                        _store["body"] = await resp.json()
+                    except Exception:
+                        pass
+
+            page.on("response", on_response)
+            try:
+                await page.goto(
+                    f"https://www.douyin.com/video/{video_id}",
+                    wait_until="domcontentloaded",
+                    timeout=20000,
+                )
+                await page.wait_for_timeout(2500)
+            except PlaywrightTimeoutError:
+                pass
+            finally:
+                page.remove_listener("response", on_response)
+
+            body = detail.get("body")
+            aweme = (body or {}).get("aweme_detail") if body else None
+            sec_uid = ((aweme or {}).get("author") or {}).get("sec_uid")
+            if not sec_uid:
+                return {"ok": False, "error": "Could not resolve the creator's profile from this video."}
+
+            await page.goto(
+                f"https://www.douyin.com/user/{sec_uid}", wait_until="domcontentloaded", timeout=20000
+            )
+            await page.wait_for_timeout(2000)
+
+            follow_btn = page.locator(DOUYIN_FOLLOWED_BUTTON_SELECTOR).first
+            try:
+                await follow_btn.wait_for(state="visible", timeout=8000)
+            except PlaywrightTimeoutError:
+                return {
+                    "ok": False,
+                    "error": "Could not find a 'following' button on the creator's profile — "
+                    "you may already not be following them, or Douyin's page layout changed.",
+                }
+
+            await follow_btn.click()
+            try:
+                confirm_btn = page.locator(DOUYIN_UNFOLLOW_CONFIRM_SELECTOR).first
+                await confirm_btn.wait_for(state="visible", timeout=3000)
+                await confirm_btn.click()
+            except PlaywrightTimeoutError:
+                pass  # no confirmation dialog appeared — fine, not every unfollow shows one
+
+            await page.wait_for_timeout(1500)
+            still_following = await page.locator(DOUYIN_FOLLOWED_BUTTON_SELECTOR).count()
+            return {"ok": still_following == 0}
+        finally:
+            await page.close()
 
 
 @mcp.tool()
@@ -660,6 +783,16 @@ async def api_backfill(request: Request) -> Response:
     return JSONResponse(await _backfill_play_urls(limit))
 
 
+@mcp.custom_route("/api/videos/{video_id}/refresh_play_url", methods=["POST"])
+async def api_refresh_play_url(request: Request) -> Response:
+    """Re-fetches this one video's play_url even if it's already populated —
+    for when playback 403s because the previously-saved signed CDN URL
+    expired, not because play_url was never captured (see
+    _refresh_play_url's docstring)."""
+    video_id = request.path_params["video_id"]
+    return JSONResponse(await _refresh_play_url(video_id))
+
+
 @mcp.custom_route("/api/youtube/status", methods=["GET"])
 async def api_youtube_status(request: Request) -> Response:
     return JSONResponse(await youtube.login_poll())
@@ -690,6 +823,8 @@ async def api_videos(request: Request) -> Response:
     show_filtered = request.query_params.get("show_filtered") == "true"
     user_param = request.query_params.get("user")
     platform_param = request.query_params.get("platform")
+    label_param = request.query_params.get("label")
+    starred_param = request.query_params.get("starred")
 
     query = f"SELECT {', '.join(_VIDEO_COLUMNS)} FROM videos"
     conditions = []
@@ -705,6 +840,14 @@ async def api_videos(request: Request) -> Response:
     if platform_param:
         conditions.append("platform = ?")
         params.append(platform_param)
+    if starred_param == "true":
+        conditions.append("starred = 1")
+    if label_param:
+        # labels is a comma-joined string (e.g. "ai_tech,programming") — match
+        # label_param as one of the comma-separated entries, not a substring
+        # of a different label name.
+        conditions.append("(',' || labels || ',') LIKE ?")
+        params.append(f"%,{label_param},%")
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY published_at DESC"
@@ -717,7 +860,9 @@ async def api_videos(request: Request) -> Response:
     videos = [dict(zip(_VIDEO_COLUMNS, row)) for row in rows]
     for v in videos:
         v["watched"] = bool(v["watched"])
-    return JSONResponse({"videos": videos, "users": users})
+        v["starred"] = bool(v["starred"])
+        v["labels"] = v["labels"].split(",") if v["labels"] else []
+    return JSONResponse({"videos": videos, "users": users, "label_categories": list(LABEL_CATEGORIES.keys())})
 
 
 @mcp.custom_route("/api/videos/{video_id}/watched", methods=["POST"])
@@ -730,6 +875,100 @@ async def api_toggle_watched(request: Request) -> Response:
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/videos/{video_id}/starred", methods=["POST"])
+async def api_toggle_starred(request: Request) -> Response:
+    """Body {"starred": true|false} — a plain bookmark flag, independent of
+    watched state and interest_score, so a starred video stays easy to find
+    for a later review pass even after you've watched and marked it."""
+    video_id = request.path_params["video_id"]
+    body = await request.json()
+    starred = bool(body.get("starred", True))
+    conn = _db()
+    conn.execute("UPDATE videos SET starred = ? WHERE id = ?", (1 if starred else 0, video_id))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/videos/{video_id}/score", methods=["POST"])
+async def api_set_score(request: Request) -> Response:
+    """Body {"score": 1-5} to set, {"score": null} to clear. Purely
+    subjective — never inferred, always set by the user."""
+    video_id = request.path_params["video_id"]
+    body = await request.json()
+    score = body.get("score")
+    if score is not None:
+        score = int(score)
+        if not 1 <= score <= 5:
+            return JSONResponse({"error": "score must be 1-5 or null"}, status_code=400)
+    conn = _db()
+    conn.execute("UPDATE videos SET interest_score = ? WHERE id = ?", (score, video_id))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/videos/{video_id}/labels", methods=["POST"])
+async def api_set_labels(request: Request) -> Response:
+    """Body {"labels": ["ai_tech", "programming"]} — manual override of the
+    auto-classified labels (replaces them entirely, doesn't merge)."""
+    video_id = request.path_params["video_id"]
+    body = await request.json()
+    labels = body.get("labels", [])
+    conn = _db()
+    conn.execute("UPDATE videos SET labels = ? WHERE id = ?", (",".join(labels), video_id))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/labels/backfill", methods=["POST"])
+async def api_labels_backfill(request: Request) -> Response:
+    """Re-runs the keyword classifier over every row (not just NULL ones) so
+    edits to LABEL_CATEGORIES take effect on already-synced videos without
+    waiting for a resync. Manual overrides made via /labels are overwritten —
+    that's a deliberate tradeoff for a personal single-user feed, not
+    something to build reconciliation for."""
+    conn = _db()
+    rows = conn.execute("SELECT id, title, content FROM videos").fetchall()
+    updated = 0
+    for video_id, title, content in rows:
+        labels = ",".join(_classify_labels(title or "", content or ""))
+        conn.execute("UPDATE videos SET labels = ? WHERE id = ?", (labels, video_id))
+        updated += 1
+    conn.commit()
+    conn.close()
+    return JSONResponse({"updated": updated})
+
+
+@mcp.custom_route("/api/videos/{video_id}/unfollow_creator", methods=["POST"])
+async def api_unfollow_creator(request: Request) -> Response:
+    """Unfollows/unsubscribes from this video's creator on their actual
+    platform — a real, hard-to-reverse action on the live account, not just
+    a local DB change. On success, also removes the creator from the local
+    `creators` table so the sidebar reflects it immediately; already-synced
+    videos from them are left alone (historical data isn't undone)."""
+    video_id = request.path_params["video_id"]
+    conn = _db()
+    row = conn.execute("SELECT platform, user FROM videos WHERE id = ?", (video_id,)).fetchone()
+    conn.close()
+    if not row:
+        return JSONResponse({"ok": False, "error": "Unknown video"}, status_code=404)
+    platform, creator = row
+
+    if platform == "youtube":
+        result = await youtube.unsubscribe(video_id)
+    else:
+        result = await _unfollow_douyin_creator(video_id)
+
+    if result.get("ok"):
+        conn = _db()
+        conn.execute("DELETE FROM creators WHERE platform = ? AND name = ?", (platform, creator))
+        conn.commit()
+        conn.close()
+    return JSONResponse(result)
 
 
 @mcp.custom_route("/api/creators", methods=["GET"])
