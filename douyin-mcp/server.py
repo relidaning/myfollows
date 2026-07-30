@@ -855,6 +855,11 @@ async def api_videos(request: Request) -> Response:
     conn = _db()
     rows = conn.execute(query, params).fetchall()
     users = [r[0] for r in conn.execute("SELECT DISTINCT user FROM videos ORDER BY user").fetchall()]
+    label_groups = [
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT labels FROM videos WHERE labels IS NOT NULL AND labels != ''"
+        ).fetchall()
+    ]
     conn.close()
 
     videos = [dict(zip(_VIDEO_COLUMNS, row)) for row in rows]
@@ -862,7 +867,19 @@ async def api_videos(request: Request) -> Response:
         v["watched"] = bool(v["watched"])
         v["starred"] = bool(v["starred"])
         v["labels"] = v["labels"].split(",") if v["labels"] else []
-    return JSONResponse({"videos": videos, "users": users, "label_categories": list(LABEL_CATEGORIES.keys())})
+
+    # Custom labels (added ad hoc via the "+" chip, not in LABEL_CATEGORIES)
+    # are promoted here so they become a selectable chip on every video and
+    # a real option in the top-bar filter dropdown, not just an active chip
+    # on the one video they were first typed on.
+    custom_labels = sorted({
+        label
+        for group in label_groups
+        for label in group.split(",")
+        if label not in LABEL_CATEGORIES
+    })
+    label_categories = list(LABEL_CATEGORIES.keys()) + custom_labels
+    return JSONResponse({"videos": videos, "users": users, "label_categories": label_categories})
 
 
 @mcp.custom_route("/api/videos/{video_id}/watched", methods=["POST"])

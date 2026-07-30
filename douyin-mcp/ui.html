@@ -170,8 +170,8 @@
     display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px;
   }
   .label-chip {
-    font-size: 13px; padding: 5px 11px; border-radius: 6px; cursor: pointer;
-    background: #201f26; border: 1px solid var(--line); color: var(--text-dim);
+    font-size: 13px; font-weight: 600; padding: 5px 11px; border-radius: 6px; cursor: pointer;
+    background: #201f26; border: 1px solid var(--line); color: var(--text);
     /* Without these, a chip shrinks below its text's natural width once the
        row runs low on space (flex-shrink defaults to 1) and wraps its OWN
        text across two lines instead of the whole chip wrapping to the next
@@ -278,6 +278,14 @@
     display: block;
     width: auto; height: auto;
     max-width: 99vw; max-height: 95vh;
+    /* Flex items default to min-height:auto, which for a replaced element
+       floors shrinking at its aspect-ratio-implied size — so a portrait
+       (9:16) video claiming up to 95vh left no room for #playerTitleRow/
+       #playerMeta/#playerMark below it inside #playerCard's own 99vh cap,
+       pushing them fully off-screen instead of visibly "squeezed".
+       min-height:0 lets the column flex layout actually shrink the video
+       below 95vh to make room for its siblings — confirmed 2026-07-29. */
+    min-height: 0;
     aspect-ratio: 9 / 16; /* placeholder so it reserves full size
       immediately instead of popping in small then growing; real intrinsic
       ratio overrides this once metadata loads. Must stay paired with
@@ -319,7 +327,7 @@
     width: min(90vw, 480px);
     margin-bottom: 6px; /* moved above the video 2026-07-29 — was part of #playerMeta below it */
   }
-  #playerTitleRow .title { font-size: 13px; -webkit-line-clamp: 3; min-height: 0; }
+  #playerTitleRow .title { font-size: 18px; font-weight: 700; -webkit-line-clamp: 3; min-height: 0; }
   #playerClose {
     background: transparent; border: 1px solid var(--line); color: var(--text);
     width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
@@ -327,7 +335,7 @@
   }
   #playerClose:hover { border-color: var(--coral); color: var(--coral); }
   #playerMeta {
-    display: flex; flex-direction: column; gap: 2px;
+    display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px;
     width: min(90vw, 480px);
   }
   #playerLink { font-size: 11.5px; color: var(--text-dim); }
@@ -361,6 +369,7 @@
     display: block; border: 0; background: #000;
     width: min(99vw, 960px); height: auto; aspect-ratio: 16 / 9;
     max-width: 99vw; max-height: 95vh;
+    min-height: 0; /* same shrink-to-make-room fix as #playerCard video */
     border-radius: var(--radius);
   }
   #playerCard iframe.hidden { display: none; }
@@ -497,7 +506,7 @@ let activeUser = '';
 let currentPlatform = null;
 let currentVideo = null;
 let ytPlaying = true;
-let ytSpeed = 1;
+let ytVolume = 100;
 
 function fmtDate(iso) {
   if (!iso) return '';
@@ -548,7 +557,7 @@ function openPlayer(v) {
     // in-player Space handler never fires; without postMessage control,
     // hitting Space here silently did nothing to the visible video.
     ytPlaying = true;
-    ytSpeed = 1;
+    ytVolume = 100;
     playerVideo.pause();
     playerVideo.removeAttribute('src');
     playerVideo.classList.add('hidden');
@@ -654,28 +663,25 @@ playerVideo.addEventListener('loadedmetadata', () => {
   }
 });
 
-const SPEED_STEP = 0.25;
-const SPEED_MIN = 0.25;
-const SPEED_MAX = 3;
+const VOLUME_STEP = 10; // percentage points, 0-100 scale (matches YouTube's IFrame API)
 let speedBadgeTimer = null;
 
-function nudgeSpeed(delta) {
-  let rate;
+function nudgeVolume(delta) {
+  let volumePct;
   if (currentPlatform === 'youtube') {
-    // The iframe's actual <video> is never reachable from our document (cross-
-    // origin), so unlike Douyin's playerVideo.playbackRate, this can't read
-    // the real current rate back — same optimistic-tracking approach as
-    // ytPlaying, driven entirely by our own postMessage commands.
-    ytSpeed = Math.round((ytSpeed + delta) * 100) / 100;
-    ytSpeed = Math.min(SPEED_MAX, Math.max(SPEED_MIN, ytSpeed));
-    ytCommand('setPlaybackRate', [ytSpeed]);
-    rate = ytSpeed;
+    // Same optimistic-tracking approach as ytPlaying — the iframe's actual
+    // <video> is never reachable from our document (cross-origin), so this
+    // can't read the real current volume back, only drive it one-way via
+    // postMessage.
+    ytVolume = Math.round(Math.min(100, Math.max(0, ytVolume + delta)));
+    ytCommand('setVolume', [ytVolume]);
+    volumePct = ytVolume;
   } else {
-    const next = Math.round((playerVideo.playbackRate + delta) * 100) / 100;
-    playerVideo.playbackRate = Math.min(SPEED_MAX, Math.max(SPEED_MIN, next));
-    rate = playerVideo.playbackRate;
+    const next = Math.round((playerVideo.volume * 100 + delta));
+    playerVideo.volume = Math.min(100, Math.max(0, next)) / 100;
+    volumePct = Math.round(playerVideo.volume * 100);
   }
-  showBadge((rate % 1 === 0 ? rate.toFixed(0) : rate.toFixed(2)) + '×');
+  showBadge(`🔊 ${volumePct}%`);
 }
 
 const SEEK_STEP_SEC = 5;
@@ -757,6 +763,17 @@ function togglePause() {
   else { playerVideo.pause(); showBadge('❚❚'); }
 }
 
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+    return;
+  }
+  // Fullscreen just the video/iframe element, not the whole #playerCard
+  // (title/meta/labels shouldn't come along into fullscreen).
+  const el = currentPlatform === 'youtube' ? playerFrame : playerVideo;
+  el.requestFullscreen();
+}
+
 // Grid-level shortcuts (only active while the player is closed): vim-style
 // count prefix + command, e.g. "5" then "m" marks the first 5 visible
 // videos watched. Bare "m" (no digits) means "1".
@@ -794,11 +811,12 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closePlayer(); return; }
 
   if (playerOverlay.classList.contains('show')) {
-    if (e.key === 'ArrowUp') { e.preventDefault(); nudgeSpeed(SPEED_STEP); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); nudgeSpeed(-SPEED_STEP); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); nudgeVolume(VOLUME_STEP); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); nudgeVolume(-VOLUME_STEP); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); nudgeSeek(SEEK_STEP_SEC); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); nudgeSeek(-SEEK_STEP_SEC); }
     else if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); togglePause(); }
+    else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleFullscreen(); }
     return;
   }
 

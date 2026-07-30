@@ -188,8 +188,10 @@ Grid (player closed):
 
 Player (open):
 - `Space` — pause/resume
-- `↑`/`↓` — playback speed ±0.25×, clamped [0.25×, 3×]
+- `↑`/`↓` — volume ±10%, clamped [0%, 100%] (playback speed is handled by an
+  external browser extension instead, not this app — see below)
 - `←`/`→` — seek ±5s
+- `f` — toggle fullscreen (just the video/iframe, not the whole player card)
 - `Escape` / click outside / ✕ — close
 
 All driven by one `document` keydown listener that branches on whether
