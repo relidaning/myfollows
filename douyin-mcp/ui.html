@@ -438,9 +438,9 @@
   #playerSheet .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
   #playerSheet .sheet-head h3 { margin: 0; font-size: 14px; color: var(--text-dim); font-weight: 600; }
   #playerSheetClose {
-    background: transparent; border: 1px solid var(--line); color: var(--text);
-    width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; padding: 0;
-    display: flex; align-items: center; justify-content: center;
+    /* Redundant with tapping the backdrop to dismiss the sheet — hidden per
+       user request (Tasks.md: "I want hidden the 'x' button"). */
+    display: none;
   }
   #playerSheetClose:hover { border-color: var(--coral); color: var(--coral); }
   #playerSheet .sheet-body { display: flex; flex-direction: column; gap: 16px; }
