@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Follows">
 <title>Follows</title>
 <style>
   :root {
@@ -23,6 +27,16 @@
     -webkit-font-smoothing: antialiased;
   }
   body { min-height: 100vh; }
+
+  /* Applied while the creator drawer or the player is open, so a touch
+     scroll gesture that starts over the drawer/sheet/player can't leak
+     through to the grid page underneath — confirmed 2026-08-07 this was
+     happening: scrolling inside the rate/tag sheet scrolled the grid behind
+     it instead. Plain `overflow:hidden` on body is unreliable on iOS
+     Safari (it still rubber-bands); pinning body to `position:fixed` at its
+     current scroll offset (set via JS, see lockBodyScroll) is the standard
+     fix that works there too. */
+  body.scroll-locked { position: fixed; left: 0; right: 0; overflow: hidden; width: 100%; }
 
   header {
     position: sticky; top: 0; z-index: 20;
@@ -67,6 +81,12 @@
 
   #syncStatus { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 
+  /* On desktop this wrapper is transparent to layout — its children (the
+     platform/label selects, checkboxes, and sync buttons) flow directly
+     into the header's own flex row exactly as before it existed. Only the
+     mobile media query below turns it into an actual dropdown panel. */
+  #headerControls { display: contents; }
+
   .layout { display: flex; align-items: flex-start; max-width: 1600px; margin: 0 auto; }
 
   /* Creator sidebar */
@@ -75,6 +95,7 @@
     position: sticky; top: 61px;
     height: calc(100vh - 61px);
     overflow-y: auto;
+    overscroll-behavior: contain; /* stop an over-scroll at the top/bottom of the creator list from chaining into the grid page behind it */
     padding: 14px 10px;
     border-right: 1px solid var(--line);
   }
@@ -173,8 +194,8 @@
        flex container, so flex-wrap/justify-content/gap were all no-ops;
        chips just wrapped as normal inline content (left-to-right), which
        happened to look identical to flex-start so it went unnoticed until
-       #playerMark's override changed this to center and nothing moved.
-       Confirmed 2026-07-29. */
+       the player's label row (then #playerMark, now #playerSheet) had a
+       centering override applied and nothing moved. Confirmed 2026-07-29. */
     display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px;
   }
   .label-chip {
@@ -268,13 +289,21 @@
     position: relative;
     display: flex; flex-direction: column; align-items: center; gap: 4px;
     width: fit-content; max-width: 99vw; max-height: 99vh;
-    /* A portrait (9:16) video renders much narrower than the marking
-       controls need — without a floor here, #playerMark's star-toggle +
-       score-stars row (nowrap) overflows past the card's right edge
-       instead of wrapping, since it has no independent width of its own to
-       fall back on. Confirmed 2026-07-29. */
+    /* A portrait (9:16) video renders much narrower than #playerTitleRow/
+       #playerChannelRow/#playerMeta need — without a floor here, those rows
+       overflow past the card's right edge instead of wrapping, since they
+       have no independent width of their own to fall back on. Confirmed
+       2026-07-29. */
     min-width: min(94vw, 340px);
   }
+  /* Wraps just the video/iframe/fallback — a flex item of #playerCard's
+     column, so (per flexbox sizing rules, not normal block-box 100%-width
+     rules) it shrink-wraps to the video's own rendered width rather than
+     stretching. #playerRail and #speedBadge anchor to *this*, not
+     #playerCard, so they sit at the video's actual corners regardless of
+     the video's aspect ratio, instead of far below a portrait video where
+     #playerCard's own fit-content box happens to end. */
+  #playerMediaWrap { position: relative; }
   #speedBadge {
     position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
     background: rgba(0,0,0,0.75); color: #fff; font-size: 13px; font-weight: 600;
@@ -289,8 +318,8 @@
     /* Flex items default to min-height:auto, which for a replaced element
        floors shrinking at its aspect-ratio-implied size — so a portrait
        (9:16) video claiming up to 95vh left no room for #playerTitleRow/
-       #playerMeta/#playerMark below it inside #playerCard's own 99vh cap,
-       pushing them fully off-screen instead of visibly "squeezed".
+       #playerChannelRow/#playerMeta below it inside #playerCard's own 99vh
+       cap, pushing them fully off-screen instead of visibly "squeezed".
        min-height:0 lets the column flex layout actually shrink the video
        below 95vh to make room for its siblings — confirmed 2026-07-29. */
     min-height: 0;
@@ -312,24 +341,16 @@
   #playerFallback.show { display: block; }
   #playerFallback p { margin: 0 0 12px; }
   #playerRefreshBtn { font-size: 12px; padding: 7px 14px; }
-  /* Width note applies to #playerTitleRow, #playerMeta, #playerMark, and
-     #playerFallback alike: a fixed `width` (not max-width, not
-     align-self:stretch):
-     - Not a percentage/stretch: #playerCard is width:fit-content, and a
-       flex-wrap row's contribution to an ancestor's fit-content size is its
-       UNWRAPPED max-content width (wrapping only kicks in once the
-       container's width is already otherwise constrained) — #playerMark's
-       label row has ~11 chips that, laid out on one line, come to ~945px,
-       so fit-content sized the whole modal to that even for a narrow
-       portrait video rendered at only ~534px. Confirmed 2026-07-29.
-     - Not max-width either: max-width lets a row shrink down to fit short
-       content, while #playerMark (driven by ~11 label chips) almost always
-       sits at the full cap — a short title produced a narrow, centered row
-       sitting above a much wider labels row, visibly misaligned. Confirmed
-       2026-07-29.
-     A fixed `width` forces every one of these rows to always match, so they
-     consistently line up and center correctly under #playerCard's own
-     align-items:center regardless of content length. */
+  /* Width note applies to #playerTitleRow, #playerChannelRow, #playerMeta,
+     and #playerFallback alike: a fixed `width` (not max-width, not
+     align-self:stretch) so they always line up and center correctly under
+     #playerCard's own align-items:center regardless of content length —
+     max-width would let a short title's row sit narrower than the row
+     below it, visibly misaligned. Confirmed 2026-07-29 (back when the
+     labels row also lived directly in #playerCard and needed the same
+     treatment — it's since moved into #playerSheet, which has its own
+     fixed-width-via-max-width rule instead, appropriate there since a
+     bottom sheet isn't trying to align itself under the video). */
   #playerTitleRow {
     display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
     width: min(90vw, 480px);
@@ -356,48 +377,84 @@
   #playerLink { font-size: 11.5px; color: var(--text-dim); }
   #playerLink a { color: var(--cyan); }
   #playerDate { font-size: 11.5px; color: var(--text-dim); }
-  #playerRightActions {
-    display: flex; gap: 8px;
-    margin-left: auto; /* pushes this whole group to the row's right edge, opposite Star/Watch later/score-stars on the left */
+
+  /* TikTok-style right-bottom action rail, overlaid on the video itself
+     (anchored to #playerMediaWrap, see above) rather than sitting in the
+     document flow below it — score/labels/unfollow/unlist used to live in
+     an always-visible row under the video, but that ate space and pushed
+     the actual video down; now only Star and Watch later (the two
+     single-tap toggles) live in the rail directly, and everything else
+     (score, labels, Unfollow, Unlist) is tucked behind the tag icon, which
+     opens #playerSheet — same idea as TikTok hiding its comments behind
+     one icon instead of showing them inline. */
+  #playerRail {
+    position: absolute; right: 10px; bottom: 64px; z-index: 5;
+    /* bottom offset clears the native <video> control bar (and YouTube's
+       own bottom-right settings/fullscreen icons inside the iframe) —
+       16px overlapped them directly, confirmed via screenshot. */
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
   }
-  #playerUnfollowBtn {
-    font-size: 11px; padding: 4px 9px; border-radius: 6px;
-    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+  .rail-btn {
+    width: 46px; height: 46px; flex-shrink: 0; padding: 0;
+    border-radius: 50%; position: relative;
+    background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.18);
+    color: #fff; font-size: 21px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
   }
+  .rail-btn:hover { background: rgba(0,0,0,0.65); }
+  #playerStarToggle.active { background: var(--coral); border-color: var(--coral); color: #0b0b0d; }
+  #playerWatchLaterToggle.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; }
+  #playerSheetToggle.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; }
+  .rail-badge {
+    display: none;
+    position: absolute; bottom: -4px; right: -4px;
+    min-width: 17px; padding: 1px 4px; border-radius: 9px;
+    background: var(--coral); color: #fff; font-size: 10px; font-weight: 700;
+    line-height: 15px; text-align: center;
+  }
+  .rail-badge.show { display: block; }
+
+  /* Bottom sheet for score + labels + Unfollow/Unlist — the "just like
+     TikTok comments" panel, hidden until #playerSheetToggle (the rail's tag
+     icon) opens it. Fixed/centered independently of #playerCard's own
+     fit-content width, since a bottom sheet reads better full-width (up to
+     a cap) than squeezed to match a narrow portrait video. */
+  #playerSheetBackdrop {
+    display: none; position: fixed; inset: 0; z-index: 63;
+    background: rgba(0,0,0,0.55);
+  }
+  #playerSheetBackdrop.show { display: block; }
+  #playerSheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 64;
+    max-width: 480px; margin: 0 auto;
+    max-height: 70vh; overflow-y: auto; overscroll-behavior: contain;
+    background: var(--panel); border: 1px solid var(--line); border-bottom: none;
+    border-radius: 16px 16px 0 0;
+    padding: 14px 16px max(14px, env(safe-area-inset-bottom));
+    transform: translateY(100%);
+    transition: transform 0.22s ease;
+  }
+  #playerSheet.show { transform: translateY(0); }
+  #playerSheet .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  #playerSheet .sheet-head h3 { margin: 0; font-size: 14px; color: var(--text-dim); font-weight: 600; }
+  #playerSheetClose {
+    background: transparent; border: 1px solid var(--line); color: var(--text);
+    width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #playerSheetClose:hover { border-color: var(--coral); color: var(--coral); }
+  #playerSheet .sheet-body { display: flex; flex-direction: column; gap: 16px; }
+  #playerSheet .score-stars .star { font-size: 24px; }
+  #playerSheet .labels-row { justify-content: flex-start; }
+  #playerSheetActions { display: flex; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+  #playerSheetActions button { flex: 1; padding: 10px; font-size: 13px; border-radius: 8px; }
+  #playerUnfollowBtn { background: transparent; border: 1px solid var(--line); color: var(--text-dim); }
   #playerUnfollowBtn:hover:not(:disabled) { border-color: var(--coral); color: var(--coral); }
   #playerUnfollowBtn:disabled { opacity: 0.5; cursor: default; }
-
-  #playerMark {
-    display: flex; flex-direction: column; gap: 8px;
-    width: min(90vw, 480px); /* see #playerMeta's comment — fixed width so this always matches meta/fallback regardless of how many labels a video has */
-    padding-top: 10px; margin-top: 4px; border-top: 1px solid var(--line);
-  }
-  #playerMark .score-stars .star { font-size: 20px; }
-  #playerMark .labels-row { justify-content: center; }
-  #playerMark .row { justify-content: flex-start; gap: 14px; flex-wrap: wrap; }
-
-  #playerStarToggle {
-    font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
-    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
-  }
-  #playerStarToggle:hover { border-color: var(--coral); color: var(--coral); }
-  #playerStarToggle.active { background: var(--coral); border-color: var(--coral); color: #0b0b0d; }
-
-  #playerWatchLaterToggle {
-    font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
-    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
-  }
-  #playerWatchLaterToggle:hover { border-color: var(--cyan); color: var(--cyan); }
-  #playerWatchLaterToggle.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; }
-
-  /* Purely a local DB flag (see /api/creators/unlist) — grouped with
-     Unfollow in #playerRightActions since both are creator-level actions,
-     but sized/colored as a reversible toggle (cyan), not destructive
-     (coral) like Unfollow, since it never touches the real account. */
-  #playerUnlistBtn {
-    font-size: 11px; padding: 4px 9px; border-radius: 6px; cursor: pointer;
-    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
-  }
+  /* Purely a local DB flag (see /api/creators/unlist) — sized/colored as a
+     reversible toggle (cyan), not destructive (coral) like Unfollow, since
+     it never touches the real account. */
+  #playerUnlistBtn { background: transparent; border: 1px solid var(--line); color: var(--text-dim); }
   #playerUnlistBtn:hover { border-color: var(--cyan); color: var(--cyan); }
   #playerUnlistBtn.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; }
 
@@ -429,35 +486,140 @@
   .platform-badge.douyin { background: var(--cyan); }
   .platform-badge.youtube { background: #ff4d4d; }
 
+  /* Mobile chrome: hamburger (creator drawer) + gear (filters/sync panel),
+     hidden on desktop where those controls already sit inline in the
+     header. Reuses the app's existing emoji-as-icon convention (☆★🕓✕)
+     instead of pulling in an icon font/SVG set. */
+  .icon-btn {
+    display: none;
+    width: 38px; height: 38px; flex-shrink: 0; padding: 0;
+    align-items: center; justify-content: center;
+    font-size: 17px; line-height: 1;
+  }
+  #sidebarBackdrop { display: none; }
+  .sidebar-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 6px 8px; }
+  .sidebar-head h3 { margin: 0; }
+
+  @media (max-width: 860px) {
+    header { padding: 10px 14px; gap: 8px; }
+    .icon-btn { display: inline-flex; }
+
+    #syncStatus { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+
+    /* On desktop #headerControls is `display:contents` so its children
+       (selects/checkboxes/sync buttons) flow directly into the header's own
+       flex row, unchanged from before this media query existed. On mobile
+       it becomes a real dropdown panel instead, anchored under the gear
+       button, so it never has to fight the header row for space. */
+    #headerControls {
+      display: none;
+      position: absolute; top: 100%; right: 14px; left: 14px; margin-top: 8px;
+      flex-direction: column; align-items: stretch; gap: 10px;
+      padding: 14px;
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+      max-height: min(70vh, 520px); overflow-y: auto; overscroll-behavior: contain;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.55);
+      z-index: 30;
+    }
+    #headerControls.open { display: flex; }
+    #headerControls select, #headerControls > button, #headerControls label.check {
+      width: 100%;
+    }
+    #headerControls > button { text-align: left; }
+
+    /* Off-canvas creator drawer, opened by #sidebarToggle. Covers the
+       header area itself (z-index above it) with its own head row
+       (name + close), rather than trying to squeeze a 240px sidebar into
+       a ~375px phone viewport. */
+    .layout { display: block; }
+    aside#sidebar {
+      position: fixed; top: 0; left: 0; z-index: 46;
+      width: min(82vw, 300px);
+      height: 100vh; height: 100dvh;
+      background: var(--bg);
+      transform: translateX(-100%);
+      transition: transform 0.22s ease;
+      box-shadow: 12px 0 32px rgba(0,0,0,0.5);
+    }
+    body.sidebar-open aside#sidebar { transform: translateX(0); }
+    #sidebarBackdrop {
+      display: none; position: fixed; inset: 0; z-index: 44;
+      background: rgba(0,0,0,0.55);
+    }
+    body.sidebar-open #sidebarBackdrop { display: block; }
+
+    main { padding: 14px; }
+    #grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
+
+    /* Bigger tap targets throughout the marking controls — the desktop
+       sizes (5px/8px padding) are comfortable for a cursor but too small to
+       reliably hit with a thumb. #playerRail's buttons are already 46px
+       circles, sized for touch from the base CSS, so they don't need a
+       mobile-specific bump the way these do. */
+    .watch-toggle { padding: 9px 10px; font-size: 12.5px; }
+    .label-chip { padding: 8px 13px; font-size: 13.5px; }
+    #playerSheetActions button { min-height: 44px; font-size: 13.5px; }
+    #playerSheet .score-stars .star { font-size: 28px; }
+    #playerClose { width: 38px; height: 38px; }
+  }
+
+  @media (max-width: 640px) {
+    /* Edge-to-edge player: no rounded corners/side padding eating into a
+       narrow viewport's width, plus safe-area padding so the bottom action
+       row isn't sitting under an iPhone's home-indicator gesture bar. */
+    #playerOverlay { padding: 0; align-items: stretch; }
+    #playerCard {
+      width: 100vw; max-width: 100vw; min-width: 0;
+      padding: max(10px, env(safe-area-inset-top)) 0 max(10px, env(safe-area-inset-bottom));
+      justify-content: center;
+    }
+    #playerCard video, #playerCard iframe { max-width: 100vw; border-radius: 0; }
+    #playerTitleRow, #playerChannelRow, #playerMeta, #playerFallback {
+      width: min(94vw, 480px);
+    }
+    /* The "Open on Douyin/YouTube" source link is redundant clutter once
+       you're already watching in-app on a small screen. Desktop keeps it
+       since there's room to spare. */
+    #playerLink { display: none; }
+  }
 </style>
 </head>
 <body>
 
 <header>
+  <button id="sidebarToggle" class="icon-btn" aria-label="Creators">👥</button>
   <div class="brand"><span class="dot"></span>Follows<small id="countLabel"></small></div>
-  <select id="platformFilter">
-    <option value="">All platforms</option>
-    <option value="douyin">Douyin</option>
-    <option value="youtube">YouTube</option>
-  </select>
-  <select id="labelFilter">
-    <option value="">All labels</option>
-  </select>
-  <label class="check"><input type="checkbox" id="unwatchedOnly" checked> Unwatched only</label>
-  <label class="check"><input type="checkbox" id="showFiltered"> Show filtered (gym/drawing)</label>
-  <label class="check"><input type="checkbox" id="showUnlisted"> Show unlisted</label>
-  <label class="check"><input type="checkbox" id="starredOnly"> Starred only</label>
-  <label class="check"><input type="checkbox" id="watchLaterOnly"> Watch later only</label>
   <span id="syncStatus"></span>
-  <button id="backfillBtn" title="Fetch playable links for videos synced before in-page playback existed">Fix old links</button>
-  <button class="primary" id="syncBtn">Sync Douyin</button>
-  <button id="ytLoginBtn">Login to YouTube</button>
-  <button id="ytSyncBtn">Sync YouTube</button>
+  <div id="headerControls">
+    <select id="platformFilter">
+      <option value="">All platforms</option>
+      <option value="douyin">Douyin</option>
+      <option value="youtube">YouTube</option>
+    </select>
+    <select id="labelFilter">
+      <option value="">All labels</option>
+    </select>
+    <label class="check"><input type="checkbox" id="unwatchedOnly" checked> Unwatched only</label>
+    <label class="check"><input type="checkbox" id="showFiltered"> Show filtered (gym/drawing)</label>
+    <label class="check"><input type="checkbox" id="showUnlisted"> Show unlisted</label>
+    <label class="check"><input type="checkbox" id="starredOnly"> Starred only</label>
+    <label class="check"><input type="checkbox" id="watchLaterOnly"> Watch later only</label>
+    <button id="backfillBtn" title="Fetch playable links for videos synced before in-page playback existed">Fix old links</button>
+    <button class="primary" id="syncBtn">Sync Douyin</button>
+    <button id="ytLoginBtn">Login to YouTube</button>
+    <button id="ytSyncBtn">Sync YouTube</button>
+  </div>
+  <button id="toolsToggle" class="icon-btn" aria-label="Filters and sync">⚙</button>
 </header>
+
+<div id="sidebarBackdrop"></div>
 
 <div class="layout">
   <aside id="sidebar">
-    <h3>Creators</h3>
+    <div class="sidebar-head">
+      <h3>Creators</h3>
+      <button id="sidebarClose" class="icon-btn" aria-label="Close">✕</button>
+    </div>
     <div id="creatorList"></div>
   </aside>
 
@@ -496,28 +658,44 @@
       <span class="platform-badge" id="playerPlatformBadge"></span>
       <span id="playerChannelName"></span>
     </div>
-    <span id="speedBadge"></span>
-    <video id="playerVideo" controls autoplay playsinline></video>
-    <iframe id="playerFrame" class="hidden" allow="autoplay; encrypted-media" allowfullscreen></iframe>
-    <div id="playerFallback">
-      <p id="playerFallbackMsg">Playback isn't available right now — this can happen either because the video was synced before we started saving playable links, or because Douyin's saved link expired (its signed CDN URL is only valid for about a day).</p>
-      <button id="playerRefreshBtn">Refresh link</button>
+    <div id="playerMediaWrap">
+      <span id="speedBadge"></span>
+      <video id="playerVideo" controls autoplay playsinline></video>
+      <iframe id="playerFrame" class="hidden" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+      <div id="playerFallback">
+        <p id="playerFallbackMsg">Playback isn't available right now — this can happen either because the video was synced before we started saving playable links, or because Douyin's saved link expired (its signed CDN URL is only valid for about a day).</p>
+        <button id="playerRefreshBtn">Refresh link</button>
+      </div>
+      <!-- TikTok-style right-bottom action rail: Star and Watch later are
+           direct single-tap toggles; the tag icon opens #playerSheet below
+           for score/labels/Unfollow/Unlist instead of showing them inline. -->
+      <div id="playerRail">
+        <button id="playerStarToggle" class="rail-btn" title="Star for later review"></button>
+        <button id="playerWatchLaterToggle" class="rail-btn" title="Queue this (long) video to watch later">🕓</button>
+        <button id="playerSheetToggle" class="rail-btn" title="Rate and tag">
+          🏷<span class="rail-badge" id="playerRailBadge"></span>
+        </button>
+      </div>
     </div>
     <div id="playerMeta">
       <div id="playerDate"></div>
       <div id="playerLink"><a id="playerSourceLink" href="#" target="_blank" rel="noopener"></a></div>
     </div>
-    <div id="playerMark">
-      <div class="row">
-        <button id="playerStarToggle" title="Star for later review">☆ Star</button>
-        <button id="playerWatchLaterToggle" title="Queue this (long) video to watch later">🕓 Watch later</button>
-        <span class="score-stars" id="playerStars"></span>
-        <div id="playerRightActions">
-          <button id="playerUnlistBtn" title="Hide this creator's videos from your feed without unfollowing"></button>
-          <button id="playerUnfollowBtn"></button>
-        </div>
-      </div>
-      <div class="labels-row" id="playerLabels"></div>
+  </div>
+</div>
+
+<div id="playerSheetBackdrop"></div>
+<div id="playerSheet">
+  <div class="sheet-head">
+    <h3>Rate &amp; tag</h3>
+    <button id="playerSheetClose" aria-label="Close">✕</button>
+  </div>
+  <div class="sheet-body">
+    <span class="score-stars" id="playerStars"></span>
+    <div class="labels-row" id="playerLabels"></div>
+    <div id="playerSheetActions">
+      <button id="playerUnlistBtn" title="Hide this creator's videos from your feed without unfollowing"></button>
+      <button id="playerUnfollowBtn"></button>
     </div>
   </div>
 </div>
@@ -546,6 +724,52 @@ const ytSyncBtn = document.getElementById('ytSyncBtn');
 const channelHeader = document.getElementById('channelHeader');
 const channelHeaderName = document.getElementById('channelHeaderName');
 const channelUnlistBtn = document.getElementById('channelUnlistBtn');
+const sidebarToggle = document.getElementById('sidebarToggle');
+const sidebarClose = document.getElementById('sidebarClose');
+const sidebarBackdrop = document.getElementById('sidebarBackdrop');
+const toolsToggle = document.getElementById('toolsToggle');
+const headerControls = document.getElementById('headerControls');
+
+// Shared by the creator drawer and the player: pins the body to its current
+// scroll offset so a touch-scroll gesture that starts over a fixed overlay
+// (the drawer, the player, the rate/tag sheet) can't leak through and
+// scroll the grid page underneath instead — confirmed 2026-08-07 this was
+// happening with the rate/tag sheet. Guarded by bodyScrollLocked so a
+// closeSidebar()/closePlayer() call that fires when nothing was actually
+// locked (e.g. selectCreator() calls closeSidebar() unconditionally, even
+// on desktop where the drawer never opened) is a safe no-op rather than
+// jumping the page to a stale remembered scroll position.
+let bodyScrollLocked = false;
+let bodyScrollY = 0;
+function lockBodyScroll() {
+  if (bodyScrollLocked) return;
+  bodyScrollLocked = true;
+  bodyScrollY = window.scrollY;
+  document.body.style.top = `-${bodyScrollY}px`;
+  document.body.classList.add('scroll-locked');
+}
+function unlockBodyScroll() {
+  if (!bodyScrollLocked) return;
+  bodyScrollLocked = false;
+  document.body.classList.remove('scroll-locked');
+  document.body.style.top = '';
+  window.scrollTo(0, bodyScrollY);
+}
+
+// Mobile-only chrome: off-canvas creator drawer + filters/sync dropdown.
+// closeSidebar is a harmless no-op on desktop, where the drawer is never
+// opened (the toggle button that opens it is display:none there).
+function closeSidebar() { document.body.classList.remove('sidebar-open'); unlockBodyScroll(); }
+function closeTools() { headerControls.classList.remove('open'); }
+sidebarToggle.addEventListener('click', () => {
+  const opening = !document.body.classList.contains('sidebar-open');
+  document.body.classList.toggle('sidebar-open');
+  closeTools();
+  if (opening) lockBodyScroll(); else unlockBodyScroll();
+});
+sidebarClose.addEventListener('click', closeSidebar);
+sidebarBackdrop.addEventListener('click', closeSidebar);
+toolsToggle.addEventListener('click', () => { headerControls.classList.toggle('open'); closeSidebar(); });
 
 function showBusy(text) {
   busyText.textContent = text;
@@ -573,6 +797,20 @@ const playerLabels = document.getElementById('playerLabels');
 const playerStarToggle = document.getElementById('playerStarToggle');
 const playerWatchLaterToggle = document.getElementById('playerWatchLaterToggle');
 const playerUnlistBtn = document.getElementById('playerUnlistBtn');
+const playerSheetToggle = document.getElementById('playerSheetToggle');
+const playerRailBadge = document.getElementById('playerRailBadge');
+const playerSheet = document.getElementById('playerSheet');
+const playerSheetBackdrop = document.getElementById('playerSheetBackdrop');
+const playerSheetClose = document.getElementById('playerSheetClose');
+
+// The rate/tag bottom sheet (score + labels + Unfollow/Unlist) — hidden by
+// default, opened via the rail's tag icon, same idea as TikTok tucking
+// comments behind one icon instead of showing them inline under the video.
+function openSheet() { playerSheet.classList.add('show'); playerSheetBackdrop.classList.add('show'); }
+function closeSheet() { playerSheet.classList.remove('show'); playerSheetBackdrop.classList.remove('show'); }
+playerSheetToggle.addEventListener('click', openSheet);
+playerSheetClose.addEventListener('click', closeSheet);
+playerSheetBackdrop.addEventListener('click', closeSheet);
 
 let activeUser = '';
 let currentPlatform = null;
@@ -611,6 +849,7 @@ function escapeHtml(s) {
 }
 
 function openPlayer(v) {
+  lockBodyScroll();
   playerTitle.textContent = v.title || '(untitled)';
   playerPlatformBadge.className = `platform-badge ${v.platform}`;
   playerPlatformBadge.textContent = v.platform === 'youtube' ? 'YT' : 'DY';
@@ -665,11 +904,22 @@ function openPlayer(v) {
 // static element (its click listener is wired once, below, not here) —
 // only its label/active class needs updating per video.
 function renderPlayerMark(v) {
-  playerStarToggle.textContent = v.starred ? '★ Starred' : '☆ Star';
+  // Rail icons are icon-only (no label text — there's no room in a 46px
+  // circle), with the active/inactive state carried by the filled vs.
+  // outline glyph plus the .active background color set in CSS.
+  playerStarToggle.textContent = v.starred ? '★' : '☆';
+  playerStarToggle.title = v.starred ? 'Starred — tap to unstar' : 'Star for later review';
   playerStarToggle.classList.toggle('active', !!v.starred);
 
-  playerWatchLaterToggle.textContent = v.watch_later ? '🕓 Watch later ✓' : '🕓 Watch later';
+  playerWatchLaterToggle.title = v.watch_later ? 'Queued for watch later — tap to remove' : 'Queue this (long) video to watch later';
   playerWatchLaterToggle.classList.toggle('active', !!v.watch_later);
+
+  // Small badge on the tag icon so score/labels are visible at a glance
+  // without opening the sheet — the score number if set, otherwise a dot if
+  // any labels are set, otherwise nothing (matches TikTok's comment-count
+  // badge convention).
+  playerRailBadge.textContent = v.interest_score ? v.interest_score : ((v.labels || []).length ? '•' : '');
+  playerRailBadge.classList.toggle('show', !!(v.interest_score || (v.labels || []).length));
 
   playerUnlistBtn.textContent = v.unlisted ? 'Relist' : 'Unlist';
   playerUnlistBtn.classList.toggle('active', !!v.unlisted);
@@ -813,6 +1063,8 @@ playerRefreshBtn.addEventListener('click', async () => {
 
 function closePlayer() {
   playerOverlay.classList.remove('show');
+  closeSheet(); // reset for next open — otherwise the sheet could reopen already-expanded on an unrelated video
+  unlockBodyScroll();
   playerVideo.pause();
   playerVideo.removeAttribute('src');
   playerVideo.load();
@@ -898,7 +1150,12 @@ function scoreFirstVideo(score) {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { closePlayer(); return; }
+  if (e.key === 'Escape') {
+    // One level at a time: closes the rate/tag sheet first if it's open,
+    // so Escape doesn't skip past it straight to closing the whole player.
+    if (playerSheet.classList.contains('show')) { closeSheet(); return; }
+    closePlayer(); closeSidebar(); closeTools(); return;
+  }
 
   if (playerOverlay.classList.contains('show')) {
     if (e.key === 'ArrowUp') { e.preventDefault(); nudgeVolume(VOLUME_STEP); }
@@ -1139,6 +1396,7 @@ function selectCreator(user) {
   renderCreatorActiveState();
   renderChannelHeader();
   loadVideos();
+  closeSidebar(); // picking a creator on mobile should dismiss the drawer, not leave it covering the now-filtered grid
 }
 
 // Shown above the grid only when a specific creator is selected (not "All
