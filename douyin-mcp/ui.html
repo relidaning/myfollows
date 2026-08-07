@@ -973,6 +973,10 @@ function renderPlayerMark(v) {
       if (label && !labels.some(l => l.toLowerCase() === label.toLowerCase())) {
         labels.push(label);
         setLabels(v.id, labels);
+        // Make the new tag immediately selectable on other videos too, not just this one.
+        if (!allLabelCategories.some(l => l.toLowerCase() === label.toLowerCase())) {
+          allLabelCategories.push(label);
+        }
       }
       renderPlayerMark(v);
     } else if (e.key === 'Escape') {
