@@ -164,13 +164,6 @@
   }
   .card:hover .play-hint { opacity: 1; }
   .play-hint svg { width: 36px; height: 36px; filter: drop-shadow(0 1px 4px rgba(0,0,0,0.5)); }
-  .unwatched-dot {
-    position: absolute; top: 8px; left: 8px;
-    width: 9px; height: 9px; border-radius: 50%;
-    background: var(--coral);
-    box-shadow: 0 0 0 3px rgba(254,44,85,0.25);
-  }
-
   .meta { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
   .title {
     font-size: 12.5px; line-height: 1.35; color: var(--text);
@@ -1208,7 +1201,6 @@ function card(v) {
     <button class="thumb-btn">
       <img src="${v.thumbnail_url}" loading="lazy" alt="">
       <span class="play-hint">${PLAY_ICON}</span>
-      ${v.watched ? '' : '<span class="unwatched-dot"></span>'}
     </button>
     <div class="meta">
       <div class="title">${escapeHtml(v.title || '(untitled)')}</div>
@@ -1364,14 +1356,6 @@ function updateCardInPlace(id, watched) {
   cardEl.classList.toggle('watched', watched);
   const btn = cardEl.querySelector('.watch-toggle');
   if (btn) btn.textContent = watched ? 'Mark unwatched' : 'Mark watched';
-  const existingDot = cardEl.querySelector('.unwatched-dot');
-  if (watched && existingDot) {
-    existingDot.remove();
-  } else if (!watched && !existingDot) {
-    const dot = document.createElement('span');
-    dot.className = 'unwatched-dot';
-    cardEl.querySelector('.thumb-btn').appendChild(dot);
-  }
 }
 
 function refreshGridChrome() {
