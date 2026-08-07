@@ -18,8 +18,10 @@ tab and update the relevant constant or `_parse_feed_response` below.
 """
 
 import asyncio
+import datetime
 import logging
 import os
+import threading
 import time
 from typing import Optional
 
@@ -48,6 +50,10 @@ _log = logging.getLogger(__name__)
 
 STORAGE_STATE_PATH = common.DOUYIN_STORAGE_STATE_PATH
 UI_HTML_PATH = os.path.join(os.path.dirname(__file__), "ui.html")
+
+# Daily sync hour, in the container's local time (TZ=Asia/Shanghai in
+# docker-compose.yml) — see _scheduled_sync_loop.
+SYNC_HOUR = int(os.environ.get("SYNC_HOUR", "6"))
 
 DOUYIN_HOME = "https://www.douyin.com/"
 FOLLOW_FEED_URL = "https://www.douyin.com/follow"
@@ -825,32 +831,44 @@ async def api_videos(request: Request) -> Response:
     platform_param = request.query_params.get("platform")
     label_param = request.query_params.get("label")
     starred_param = request.query_params.get("starred")
+    watch_later_param = request.query_params.get("watch_later")
+    show_unlisted = request.query_params.get("show_unlisted") == "true"
 
-    query = f"SELECT {', '.join(_VIDEO_COLUMNS)} FROM videos"
+    # LEFT JOIN creators to know whether this video's creator is unlisted —
+    # unlisted is a creator-level flag (see /api/creators/unlist), not a
+    # videos column, so it isn't in _VIDEO_COLUMNS.
+    query = (
+        f"SELECT {', '.join('v.' + c for c in _VIDEO_COLUMNS)}, COALESCE(cr.unlisted, 0) "
+        "FROM videos v LEFT JOIN creators cr ON cr.platform = v.platform AND cr.name = v.user"
+    )
     conditions = []
     params: list = []
     if watched_param is not None:
-        conditions.append("watched = ?")
+        conditions.append("v.watched = ?")
         params.append(1 if watched_param == "true" else 0)
     if not show_filtered:
-        conditions.append("filtered_category IS NULL")
+        conditions.append("v.filtered_category IS NULL")
+    if not show_unlisted:
+        conditions.append("COALESCE(cr.unlisted, 0) = 0")
     if user_param:
-        conditions.append("user = ?")
+        conditions.append("v.user = ?")
         params.append(user_param)
     if platform_param:
-        conditions.append("platform = ?")
+        conditions.append("v.platform = ?")
         params.append(platform_param)
     if starred_param == "true":
-        conditions.append("starred = 1")
+        conditions.append("v.starred = 1")
+    if watch_later_param == "true":
+        conditions.append("v.watch_later = 1")
     if label_param:
         # labels is a comma-joined string (e.g. "ai_tech,programming") — match
         # label_param as one of the comma-separated entries, not a substring
         # of a different label name.
-        conditions.append("(',' || labels || ',') LIKE ?")
+        conditions.append("(',' || v.labels || ',') LIKE ?")
         params.append(f"%,{label_param},%")
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY published_at DESC"
+    query += " ORDER BY v.published_at DESC"
 
     conn = _db()
     rows = conn.execute(query, params).fetchall()
@@ -862,10 +880,12 @@ async def api_videos(request: Request) -> Response:
     ]
     conn.close()
 
-    videos = [dict(zip(_VIDEO_COLUMNS, row)) for row in rows]
+    videos = [dict(zip(_VIDEO_COLUMNS + ["unlisted"], row)) for row in rows]
     for v in videos:
         v["watched"] = bool(v["watched"])
         v["starred"] = bool(v["starred"])
+        v["watch_later"] = bool(v["watch_later"])
+        v["unlisted"] = bool(v["unlisted"])
         v["labels"] = v["labels"].split(",") if v["labels"] else []
 
     # Custom labels (added ad hoc via the "+" chip, not in LABEL_CATEGORIES)
@@ -904,6 +924,23 @@ async def api_toggle_starred(request: Request) -> Response:
     starred = bool(body.get("starred", True))
     conn = _db()
     conn.execute("UPDATE videos SET starred = ? WHERE id = ?", (1 if starred else 0, video_id))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/videos/{video_id}/watch_later", methods=["POST"])
+async def api_toggle_watch_later(request: Request) -> Response:
+    """Body {"watch_later": true|false} — a separate queue flag from
+    `starred`, meant for long videos you don't have time to watch right now
+    but want to come back to (as opposed to `starred`'s "worth a second
+    look" bookmark). Independent of watched state, interest_score, and
+    starred, so all four dimensions can be set in any combination."""
+    video_id = request.path_params["video_id"]
+    body = await request.json()
+    watch_later = bool(body.get("watch_later", True))
+    conn = _db()
+    conn.execute("UPDATE videos SET watch_later = ? WHERE id = ?", (1 if watch_later else 0, video_id))
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
@@ -988,12 +1025,39 @@ async def api_unfollow_creator(request: Request) -> Response:
     return JSONResponse(result)
 
 
+@mcp.custom_route("/api/creators/unlist", methods=["POST"])
+async def api_unlist_creator(request: Request) -> Response:
+    """Body {"platform": ..., "name": ..., "unlisted": true|false} — hides
+    (or reveals) this creator's videos from the default feed view, without
+    touching the real Douyin/YouTube follow relationship at all. Unlike
+    /api/videos/{id}/unfollow_creator (a real, hard-to-reverse action on the
+    live account), this is a plain local DB flag: you stay followed/
+    subscribed, their videos just stop showing up in the list. Upserts the
+    creator row so this still works even if the sidebar hasn't synced them
+    yet (name-only, no other data available at that point)."""
+    body = await request.json()
+    platform = body.get("platform")
+    name = body.get("name")
+    unlisted = bool(body.get("unlisted", True))
+    if not platform or not name:
+        return JSONResponse({"error": "platform and name are required"}, status_code=400)
+    conn = _db()
+    conn.execute(
+        "INSERT INTO creators (name, platform, unlisted) VALUES (?, ?, ?) "
+        "ON CONFLICT(platform, name) DO UPDATE SET unlisted = excluded.unlisted",
+        (name, platform, 1 if unlisted else 0),
+    )
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "unlisted": unlisted})
+
+
 @mcp.custom_route("/api/creators", methods=["GET"])
 async def api_creators(request: Request) -> Response:
     platform_param = request.query_params.get("platform")
     conn = _db()
     query = (
-        "SELECT c.name, c.platform, c.avatar_url, c.unread_count, "
+        "SELECT c.name, c.platform, c.avatar_url, c.unread_count, c.unlisted, "
         "(SELECT COUNT(*) FROM videos v WHERE v.user = c.name AND v.platform = c.platform "
         "AND v.watched = 0 AND v.filtered_category IS NULL) AS unwatched_synced "
         "FROM creators c"
@@ -1006,7 +1070,10 @@ async def api_creators(request: Request) -> Response:
     rows = conn.execute(query, params).fetchall()
     conn.close()
     creators = [
-        {"name": r[0], "platform": r[1], "avatar_url": r[2], "unread_count": r[3], "unwatched_synced": r[4]}
+        {
+            "name": r[0], "platform": r[1], "avatar_url": r[2], "unread_count": r[3],
+            "unlisted": bool(r[4]), "unwatched_synced": r[5],
+        }
         for r in rows
     ]
     return JSONResponse({"creators": creators})
@@ -1064,5 +1131,77 @@ async def api_play(request: Request) -> Response:
     )
 
 
+_BASE_URL = "http://127.0.0.1:8082"
+
+
+def _sync_both_platforms(label_prefix: str) -> None:
+    """POST /api/sync then /api/youtube/sync over loopback, logging results.
+
+    Shared by the startup sync and the daily scheduled sync so both get the
+    same locking and not-logged-in handling the REST endpoints already have.
+    """
+    with httpx.Client(timeout=300.0) as client:
+        for label, path in (("Douyin", "/api/sync"), ("YouTube", "/api/youtube/sync")):
+            try:
+                resp = client.post(f"{_BASE_URL}{path}")
+                _log.info("%s %s sync result: %s", label_prefix, label, resp.json())
+            except Exception:
+                _log.exception("%s %s sync failed", label_prefix, label)
+
+
+def _wait_for_server(timeout: float = 60.0) -> bool:
+    """Poll until our own HTTP server is accepting connections.
+
+    The startup-sync thread is started before mcp.run() binds the socket, so
+    a fixed retry/backoff here avoids racing the very server it's about to
+    call.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            httpx.get(f"{_BASE_URL}/api/videos", timeout=2.0)
+            return True
+        except Exception:
+            time.sleep(1.0)
+    return False
+
+
+def _startup_sync_once() -> None:
+    """Re-sync from Douyin and YouTube every time the server relaunches.
+
+    Runs once, right after boot, in addition to the existing daily
+    SYNC_HOUR schedule below — a container restart/redeploy shouldn't have
+    to wait until the next scheduled hour to pick up new videos.
+    """
+    if not _wait_for_server():
+        _log.error("Startup sync skipped: server never came up")
+        return
+    _log.info("Startup sync starting")
+    _sync_both_platforms("Startup")
+
+
+def _scheduled_sync_loop() -> None:
+    """Hit our own /api/sync and /api/youtube/sync once a day at SYNC_HOUR.
+
+    Runs in a plain background thread (not an asyncio task) so it doesn't
+    need to hook into FastMCP's own event-loop startup — it just sleeps and
+    then makes a normal loopback HTTP call, reusing the same locking
+    (_lock / _headless_lock) and not-logged-in handling the REST endpoints
+    already have. Container time is Asia/Shanghai (see docker-compose.yml),
+    so SYNC_HOUR=6 means 6am Beijing time regardless of host timezone.
+    """
+    _startup_sync_once()
+    while True:
+        now = datetime.datetime.now()
+        next_run = now.replace(hour=SYNC_HOUR, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += datetime.timedelta(days=1)
+        time.sleep((next_run - now).total_seconds())
+
+        _log.info("Scheduled sync starting")
+        _sync_both_platforms("Scheduled")
+
+
 if __name__ == "__main__":
+    threading.Thread(target=_scheduled_sync_loop, daemon=True).start()
     mcp.run(transport="http", host="0.0.0.0", port=8082)

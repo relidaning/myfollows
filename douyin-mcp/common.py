@@ -21,7 +21,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 _VIDEO_COLUMNS = [
     "id", "platform", "url", "title", "user", "published_at", "content",
     "thumbnail_url", "play_url", "filtered_category", "watched", "fetched_at",
-    "interest_score", "labels", "starred",
+    "interest_score", "labels", "starred", "watch_later",
 ]
 
 # Content filters (user preference, 2026-07-28): hide videos primarily about
@@ -101,7 +101,8 @@ def _db() -> sqlite3.Connection:
             fetched_at TEXT,
             interest_score INTEGER,
             labels TEXT,
-            starred INTEGER NOT NULL DEFAULT 0
+            starred INTEGER NOT NULL DEFAULT 0,
+            watch_later INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -112,7 +113,8 @@ def _db() -> sqlite3.Connection:
             platform TEXT NOT NULL DEFAULT 'douyin',
             avatar_url TEXT,
             unread_count INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT
+            updated_at TEXT,
+            unlisted INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -130,6 +132,8 @@ def _db() -> sqlite3.Connection:
         conn.execute("ALTER TABLE videos ADD COLUMN labels TEXT")
     if "starred" not in video_cols:
         conn.execute("ALTER TABLE videos ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+    if "watch_later" not in video_cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN watch_later INTEGER NOT NULL DEFAULT 0")
 
     creator_cols = {row[1] for row in conn.execute("PRAGMA table_info(creators)")}
     if "platform" not in creator_cols:
@@ -155,6 +159,9 @@ def _db() -> sqlite3.Connection:
         )
         conn.execute("DROP TABLE creators")
         conn.execute("ALTER TABLE creators_new RENAME TO creators")
+        creator_cols = {row[1] for row in conn.execute("PRAGMA table_info(creators)")}
+    if "unlisted" not in creator_cols:
+        conn.execute("ALTER TABLE creators ADD COLUMN unlisted INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     return conn
 

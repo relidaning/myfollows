@@ -100,6 +100,14 @@
     font-size: 10px; color: var(--coral); font-weight: 600;
     min-width: 16px; text-align: right;
   }
+  .creator-row.unlisted { opacity: 0.45; }
+  .creator-row .cunlist {
+    font-size: 10px; padding: 2px 6px; border-radius: 5px; flex-shrink: 0;
+    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+    opacity: 0; /* only shown on row hover, see .creator-row:hover .cunlist below */
+  }
+  .creator-row:hover .cunlist, .creator-row.unlisted .cunlist { opacity: 1; }
+  .creator-row .cunlist:hover { border-color: var(--coral); color: var(--coral); }
   .creator-row.all .cname { font-weight: 600; }
 
   main { flex: 1; min-width: 0; padding: 20px; }
@@ -334,6 +342,13 @@
     display: flex; align-items: center; justify-content: center; padding: 0;
   }
   #playerClose:hover { border-color: var(--coral); color: var(--coral); }
+  #playerChannelRow {
+    display: flex; align-items: center; gap: 6px;
+    width: min(90vw, 480px);
+    font-size: 12.5px; color: var(--text-dim);
+    margin: -2px 0 8px; cursor: pointer;
+  }
+  #playerChannelRow:hover { color: var(--cyan); }
   #playerMeta {
     display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px;
     width: min(90vw, 480px);
@@ -341,10 +356,13 @@
   #playerLink { font-size: 11.5px; color: var(--text-dim); }
   #playerLink a { color: var(--cyan); }
   #playerDate { font-size: 11.5px; color: var(--text-dim); }
+  #playerRightActions {
+    display: flex; gap: 8px;
+    margin-left: auto; /* pushes this whole group to the row's right edge, opposite Star/Watch later/score-stars on the left */
+  }
   #playerUnfollowBtn {
     font-size: 11px; padding: 4px 9px; border-radius: 6px;
     background: transparent; border: 1px solid var(--line); color: var(--text-dim);
-    margin-left: auto; /* pushes it to the row's right edge, opposite the Star/score-stars on the left */
   }
   #playerUnfollowBtn:hover:not(:disabled) { border-color: var(--coral); color: var(--coral); }
   #playerUnfollowBtn:disabled { opacity: 0.5; cursor: default; }
@@ -364,6 +382,36 @@
   }
   #playerStarToggle:hover { border-color: var(--coral); color: var(--coral); }
   #playerStarToggle.active { background: var(--coral); border-color: var(--coral); color: #0b0b0d; }
+
+  #playerWatchLaterToggle {
+    font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+  }
+  #playerWatchLaterToggle:hover { border-color: var(--cyan); color: var(--cyan); }
+  #playerWatchLaterToggle.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; }
+
+  /* Purely a local DB flag (see /api/creators/unlist) — grouped with
+     Unfollow in #playerRightActions since both are creator-level actions,
+     but sized/colored as a reversible toggle (cyan), not destructive
+     (coral) like Unfollow, since it never touches the real account. */
+  #playerUnlistBtn {
+    font-size: 11px; padding: 4px 9px; border-radius: 6px; cursor: pointer;
+    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+  }
+  #playerUnlistBtn:hover { border-color: var(--cyan); color: var(--cyan); }
+  #playerUnlistBtn.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; }
+
+  #channelHeader {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 4px 14px; font-size: 13px; color: var(--text-dim);
+  }
+  #channelHeader.hidden { display: none; }
+  #channelUnlistBtn {
+    font-size: 11px; padding: 4px 9px; border-radius: 6px; cursor: pointer;
+    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+  }
+  #channelUnlistBtn:hover { border-color: var(--cyan); color: var(--cyan); }
+  #channelUnlistBtn.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; }
 
   #playerCard iframe {
     display: block; border: 0; background: #000;
@@ -397,7 +445,9 @@
   </select>
   <label class="check"><input type="checkbox" id="unwatchedOnly" checked> Unwatched only</label>
   <label class="check"><input type="checkbox" id="showFiltered"> Show filtered (gym/drawing)</label>
+  <label class="check"><input type="checkbox" id="showUnlisted"> Show unlisted</label>
   <label class="check"><input type="checkbox" id="starredOnly"> Starred only</label>
+  <label class="check"><input type="checkbox" id="watchLaterOnly"> Watch later only</label>
   <span id="syncStatus"></span>
   <button id="backfillBtn" title="Fetch playable links for videos synced before in-page playback existed">Fix old links</button>
   <button class="primary" id="syncBtn">Sync Douyin</button>
@@ -412,6 +462,10 @@
   </aside>
 
   <main>
+    <div id="channelHeader" class="hidden">
+      <span>Showing <strong id="channelHeaderName"></strong></span>
+      <button id="channelUnlistBtn"></button>
+    </div>
     <div id="grid"></div>
     <div id="empty">
       <h2>Nothing here</h2>
@@ -438,6 +492,10 @@
       <div class="title" id="playerTitle"></div>
       <button id="playerClose" aria-label="Close">✕</button>
     </div>
+    <div id="playerChannelRow">
+      <span class="platform-badge" id="playerPlatformBadge"></span>
+      <span id="playerChannelName"></span>
+    </div>
     <span id="speedBadge"></span>
     <video id="playerVideo" controls autoplay playsinline></video>
     <iframe id="playerFrame" class="hidden" allow="autoplay; encrypted-media" allowfullscreen></iframe>
@@ -452,8 +510,12 @@
     <div id="playerMark">
       <div class="row">
         <button id="playerStarToggle" title="Star for later review">☆ Star</button>
+        <button id="playerWatchLaterToggle" title="Queue this (long) video to watch later">🕓 Watch later</button>
         <span class="score-stars" id="playerStars"></span>
-        <button id="playerUnfollowBtn"></button>
+        <div id="playerRightActions">
+          <button id="playerUnlistBtn" title="Hide this creator's videos from your feed without unfollowing"></button>
+          <button id="playerUnfollowBtn"></button>
+        </div>
       </div>
       <div class="labels-row" id="playerLabels"></div>
     </div>
@@ -467,7 +529,9 @@ const emptyMsg = document.getElementById('emptyMsg');
 const countLabel = document.getElementById('countLabel');
 const unwatchedOnly = document.getElementById('unwatchedOnly');
 const showFiltered = document.getElementById('showFiltered');
+const showUnlisted = document.getElementById('showUnlisted');
 const starredOnly = document.getElementById('starredOnly');
+const watchLaterOnly = document.getElementById('watchLaterOnly');
 const syncBtn = document.getElementById('syncBtn');
 const backfillBtn = document.getElementById('backfillBtn');
 const syncStatus = document.getElementById('syncStatus');
@@ -479,6 +543,9 @@ const platformFilter = document.getElementById('platformFilter');
 const labelFilter = document.getElementById('labelFilter');
 const ytLoginBtn = document.getElementById('ytLoginBtn');
 const ytSyncBtn = document.getElementById('ytSyncBtn');
+const channelHeader = document.getElementById('channelHeader');
+const channelHeaderName = document.getElementById('channelHeaderName');
+const channelUnlistBtn = document.getElementById('channelUnlistBtn');
 
 function showBusy(text) {
   busyText.textContent = text;
@@ -493,6 +560,9 @@ const playerVideo = document.getElementById('playerVideo');
 const playerFrame = document.getElementById('playerFrame');
 const playerFallback = document.getElementById('playerFallback');
 const playerTitle = document.getElementById('playerTitle');
+const playerChannelRow = document.getElementById('playerChannelRow');
+const playerPlatformBadge = document.getElementById('playerPlatformBadge');
+const playerChannelName = document.getElementById('playerChannelName');
 const playerSourceLink = document.getElementById('playerSourceLink');
 const playerDate = document.getElementById('playerDate');
 const playerUnfollowBtn = document.getElementById('playerUnfollowBtn');
@@ -501,10 +571,13 @@ const speedBadge = document.getElementById('speedBadge');
 const playerStars = document.getElementById('playerStars');
 const playerLabels = document.getElementById('playerLabels');
 const playerStarToggle = document.getElementById('playerStarToggle');
+const playerWatchLaterToggle = document.getElementById('playerWatchLaterToggle');
+const playerUnlistBtn = document.getElementById('playerUnlistBtn');
 
 let activeUser = '';
 let currentPlatform = null;
 let currentVideo = null;
+let creatorsByName = {}; // populated by loadCreators(); {name: {platform, unlisted, ...}} — used by the channel header's Unlist button, which needs a creator's platform even though the grid only filters by name
 let ytPlaying = true;
 let ytVolume = 100;
 
@@ -539,6 +612,9 @@ function escapeHtml(s) {
 
 function openPlayer(v) {
   playerTitle.textContent = v.title || '(untitled)';
+  playerPlatformBadge.className = `platform-badge ${v.platform}`;
+  playerPlatformBadge.textContent = v.platform === 'youtube' ? 'YT' : 'DY';
+  playerChannelName.textContent = `@${v.user || 'unknown'}`;
   playerDate.textContent = fmtDateWithAge(v.published_at);
   playerSourceLink.href = v.url;
   playerSourceLink.textContent = v.platform === 'youtube' ? 'Open on YouTube ↗' : 'Open on Douyin ↗';
@@ -591,6 +667,12 @@ function openPlayer(v) {
 function renderPlayerMark(v) {
   playerStarToggle.textContent = v.starred ? '★ Starred' : '☆ Star';
   playerStarToggle.classList.toggle('active', !!v.starred);
+
+  playerWatchLaterToggle.textContent = v.watch_later ? '🕓 Watch later ✓' : '🕓 Watch later';
+  playerWatchLaterToggle.classList.toggle('active', !!v.watch_later);
+
+  playerUnlistBtn.textContent = v.unlisted ? 'Relist' : 'Unlist';
+  playerUnlistBtn.classList.toggle('active', !!v.unlisted);
 
   playerStars.innerHTML = [1,2,3,4,5].map(n =>
     `<button class="star${v.interest_score >= n ? ' filled' : ''}" data-score="${n}">★</button>`
@@ -738,7 +820,15 @@ function closePlayer() {
 }
 
 playerClose.addEventListener('click', closePlayer);
-playerOverlay.addEventListener('click', (e) => { if (e.target === playerOverlay) closePlayer(); });
+
+// Same behavior as clicking a creator's @name on a grid card — filters the
+// grid to just their videos. Closes the player first since the filtered
+// grid sits behind it.
+playerChannelRow.addEventListener('click', () => {
+  if (!currentVideo) return;
+  closePlayer();
+  selectCreator(currentVideo.user);
+});
 
 function ytCommand(func, args = []) {
   playerFrame.contentWindow.postMessage(
@@ -907,6 +997,29 @@ async function setStarred(id, starred) {
   });
 }
 
+async function setWatchLater(id, watch_later) {
+  await fetch(`/api/videos/${id}/watch_later`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ watch_later }),
+  });
+}
+
+// Purely a local DB flag — unlike unfollow/unsubscribe, this never touches
+// the real Douyin/YouTube account, so no confirm() dialog and no "Working…"
+// state needed. Hides (or reveals) this creator's videos from the default
+// feed view while leaving the actual follow/subscription untouched.
+async function toggleUnlisted(platform, name, unlisted) {
+  await fetch('/api/creators/unlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ platform, name, unlisted }),
+  });
+  syncStatus.textContent = `${unlisted ? 'Unlisted' : 'Relisted'} ${name}`;
+  loadCreators();
+  loadVideos();
+}
+
 // Wired once (unlike the score/label chips, which are rebuilt via innerHTML
 // on every renderPlayerMark call) since playerStarToggle is a static element.
 playerStarToggle.addEventListener('click', () => {
@@ -914,6 +1027,23 @@ playerStarToggle.addEventListener('click', () => {
   currentVideo.starred = !currentVideo.starred;
   setStarred(currentVideo.id, currentVideo.starred);
   renderPlayerMark(currentVideo);
+});
+
+playerWatchLaterToggle.addEventListener('click', () => {
+  if (!currentVideo) return;
+  currentVideo.watch_later = !currentVideo.watch_later;
+  setWatchLater(currentVideo.id, currentVideo.watch_later);
+  renderPlayerMark(currentVideo);
+});
+
+// Purely a local DB flag (see toggleUnlisted) — no confirm(), unlike
+// playerUnfollowBtn below. toggleUnlisted itself refetches the creator list
+// and the grid, since unlisting changes which videos are visible there.
+playerUnlistBtn.addEventListener('click', async () => {
+  if (!currentVideo) return;
+  currentVideo.unlisted = !currentVideo.unlisted;
+  renderPlayerMark(currentVideo);
+  await toggleUnlisted(currentVideo.platform, currentVideo.user, currentVideo.unlisted);
 });
 
 // Real, hard-to-reverse action on the live Douyin/YouTube account — not
@@ -1007,8 +1137,31 @@ async function toggleWatched(id, watched) {
 function selectCreator(user) {
   activeUser = user;
   renderCreatorActiveState();
+  renderChannelHeader();
   loadVideos();
 }
+
+// Shown above the grid only when a specific creator is selected (not "All
+// creators") — a second, more discoverable place for the same Unlist action
+// as the sidebar row's hover button and the player dialog's toggle.
+function renderChannelHeader() {
+  const c = activeUser ? creatorsByName[activeUser] : null;
+  if (!c) {
+    channelHeader.classList.add('hidden');
+    return;
+  }
+  channelHeader.classList.remove('hidden');
+  channelHeaderName.textContent = c.name;
+  channelUnlistBtn.textContent = c.unlisted ? 'Relist' : 'Unlist';
+  channelUnlistBtn.classList.toggle('active', !!c.unlisted);
+}
+
+channelUnlistBtn.addEventListener('click', async () => {
+  const c = activeUser ? creatorsByName[activeUser] : null;
+  if (!c) return;
+  await toggleUnlisted(c.platform, c.name, !c.unlisted);
+  renderChannelHeader();
+});
 
 function renderCreatorActiveState() {
   creatorList.querySelectorAll('.creator-row').forEach(row => {
@@ -1022,6 +1175,7 @@ async function loadCreators() {
   const res = await fetch('/api/creators?' + params.toString());
   const data = await res.json();
   creatorList.innerHTML = '';
+  creatorsByName = Object.fromEntries(data.creators.map(c => [c.name, c]));
 
   const allRow = document.createElement('div');
   allRow.className = 'creator-row all';
@@ -1032,18 +1186,24 @@ async function loadCreators() {
 
   data.creators.forEach(c => {
     const row = document.createElement('div');
-    row.className = 'creator-row';
+    row.className = 'creator-row' + (c.unlisted ? ' unlisted' : '');
     row.dataset.user = c.name;
     const badge = c.unwatched_synced > 0 ? c.unwatched_synced : '';
     row.innerHTML = `
       <img src="${c.avatar_url}" loading="lazy" alt="" onerror="this.style.visibility='hidden'">
       <span class="cname">${escapeHtml(c.name)}</span>
       <span class="cbadge">${badge}</span>
+      <button class="cunlist" title="${c.unlisted ? 'Relist — show their videos in your feed again' : 'Unlist — hide their videos from your feed without unfollowing'}">${c.unlisted ? 'Relist' : 'Unlist'}</button>
     `;
     row.addEventListener('click', () => selectCreator(c.name));
+    row.querySelector('.cunlist').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleUnlisted(c.platform, c.name, !c.unlisted);
+    });
     creatorList.appendChild(row);
   });
   renderCreatorActiveState();
+  renderChannelHeader();
 }
 
 let currentVideos = [];
@@ -1054,10 +1214,12 @@ async function loadVideos() {
   const params = new URLSearchParams();
   if (unwatchedOnly.checked) params.set('watched', 'false');
   if (showFiltered.checked) params.set('show_filtered', 'true');
+  if (showUnlisted.checked) params.set('show_unlisted', 'true');
   if (activeUser) params.set('user', activeUser);
   if (platformFilter.value) params.set('platform', platformFilter.value);
   if (labelFilter.value) params.set('label', labelFilter.value);
   if (starredOnly.checked) params.set('starred', 'true');
+  if (watchLaterOnly.checked) params.set('watch_later', 'true');
 
   const res = await fetch('/api/videos?' + params.toString());
   const data = await res.json();
@@ -1233,7 +1395,9 @@ async function initYoutubeStatus() {
 
 unwatchedOnly.addEventListener('change', loadVideos);
 showFiltered.addEventListener('change', loadVideos);
+showUnlisted.addEventListener('change', loadVideos);
 starredOnly.addEventListener('change', loadVideos);
+watchLaterOnly.addEventListener('change', loadVideos);
 platformFilter.addEventListener('change', () => { loadVideos(); loadCreators(); });
 labelFilter.addEventListener('change', loadVideos);
 syncBtn.addEventListener('click', runSync);
