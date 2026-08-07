@@ -270,58 +270,49 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   #busyOverlay p { color: var(--text); font-size: 13px; margin: 0; }
 
-  /* Video player modal */
+  /* Video player modal — full-viewport, TikTok-style: the video fills the
+     entire screen and title/channel/date/progress/the action rail are
+     overlaid on top of it (near the bottom and right edge) rather than laid
+     out in normal document flow below it, since a 100dvh video leaves no
+     flow room below it for anything else. */
   #playerOverlay {
     position: fixed; inset: 0; z-index: 60;
-    background: rgba(0,0,0,0.97);
-    display: none; align-items: center; justify-content: center;
-    padding: 4px;
+    background: #000;
+    display: none; align-items: stretch; justify-content: stretch;
+    padding: 0;
   }
   #playerOverlay.show { display: flex; }
   #playerCard {
     position: relative;
-    display: flex; flex-direction: column; align-items: center; gap: 4px;
-    width: fit-content; max-width: 99vw; max-height: 99vh;
-    /* A portrait (9:16) video renders much narrower than #playerTitleRow/
-       #playerChannelRow/#playerMeta need — without a floor here, those rows
-       overflow past the card's right edge instead of wrapping, since they
-       have no independent width of their own to fall back on. Confirmed
-       2026-07-29. */
-    min-width: min(94vw, 340px);
+    display: flex; align-items: center; justify-content: center;
+    width: 100vw; height: 100vh; height: 100dvh;
+    max-width: 100vw; max-height: 100dvh;
   }
-  /* Wraps just the video/iframe/fallback — a flex item of #playerCard's
-     column, so (per flexbox sizing rules, not normal block-box 100%-width
-     rules) it shrink-wraps to the video's own rendered width rather than
-     stretching. #playerRail and #speedBadge anchor to *this*, not
-     #playerCard, so they sit at the video's actual corners regardless of
-     the video's aspect ratio, instead of far below a portrait video where
-     #playerCard's own fit-content box happens to end. */
-  #playerMediaWrap { position: relative; }
+  /* Fills #playerCard so the rail/progress-bar/info-overlay children (all
+     absolutely positioned against *this*, not #playerCard) anchor to the
+     actual viewport edges regardless of the video's own aspect ratio. */
+  #playerMediaWrap { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
   #speedBadge {
-    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    position: absolute; top: max(16px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
     background: rgba(0,0,0,0.75); color: #fff; font-size: 13px; font-weight: 600;
     padding: 5px 12px; border-radius: 20px; letter-spacing: 0.01em;
-    opacity: 0; transition: opacity 0.15s ease; pointer-events: none;
+    opacity: 0; transition: opacity 0.15s ease; pointer-events: none; z-index: 8;
   }
   #speedBadge.show { opacity: 1; }
   #playerCard video {
     display: block;
     width: auto; height: auto;
-    max-width: 99vw; max-height: 95vh;
+    max-width: 100vw; max-height: 100dvh;
     /* Flex items default to min-height:auto, which for a replaced element
-       floors shrinking at its aspect-ratio-implied size — so a portrait
-       (9:16) video claiming up to 95vh left no room for #playerTitleRow/
-       #playerChannelRow/#playerMeta below it inside #playerCard's own 99vh
-       cap, pushing them fully off-screen instead of visibly "squeezed".
-       min-height:0 lets the column flex layout actually shrink the video
-       below 95vh to make room for its siblings — confirmed 2026-07-29. */
+       floors shrinking at its aspect-ratio-implied size. min-height:0 lets
+       the video actually shrink to fit the viewport instead of overflowing
+       it — confirmed 2026-07-29, still applies now that it's full-viewport. */
     min-height: 0;
     aspect-ratio: 9 / 16; /* placeholder so it reserves full size
       immediately instead of popping in small then growing; real intrinsic
       ratio overrides this once metadata loads. Must stay paired with
       width/height:auto (not a fixed height) or non-9:16 videos render
       wrong — confirmed 2026-07-28, this broke once already */
-    border-radius: var(--radius);
     background: #000;
   }
   #playerCard video.hidden { display: none; }
@@ -329,62 +320,41 @@
     display: none; padding: 24px 16px; text-align: center;
     font-size: 13px; color: var(--text-dim);
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-    width: min(94vw, 480px);
+    width: min(90vw, 480px);
   }
   #playerFallback.show { display: block; }
   #playerFallback p { margin: 0 0 12px; }
   #playerRefreshBtn { font-size: 12px; padding: 7px 14px; }
-  /* Width note applies to #playerTitleRow, #playerChannelRow, #playerMeta,
-     and #playerFallback alike: a fixed `width` (not max-width, not
-     align-self:stretch) so they always line up and center correctly under
-     #playerCard's own align-items:center regardless of content length —
-     max-width would let a short title's row sit narrower than the row
-     below it, visibly misaligned. Confirmed 2026-07-29 (back when the
-     labels row also lived directly in #playerCard and needed the same
-     treatment — it's since moved into #playerSheet, which has its own
-     fixed-width-via-max-width rule instead, appropriate there since a
-     bottom sheet isn't trying to align itself under the video). */
-  #playerTitleRow {
-    display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
-    width: min(90vw, 480px);
-    margin-bottom: 6px; /* moved above the video 2026-07-29 — was part of #playerMeta below it */
-  }
-  #playerTitleRow .title { font-size: 18px; font-weight: 700; -webkit-line-clamp: 3; min-height: 0; }
+
   #playerClose {
-    background: transparent; border: 1px solid var(--line); color: var(--text);
-    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    position: absolute; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right));
+    z-index: 9;
+    background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.18); color: #fff;
+    width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center; padding: 0;
   }
   #playerClose:hover { border-color: var(--coral); color: var(--coral); }
-  #playerChannelRow {
-    display: flex; align-items: center; gap: 6px;
-    width: min(90vw, 480px);
-    font-size: 12.5px; color: var(--text-dim);
-    margin: -2px 0 8px; cursor: pointer;
-  }
-  #playerChannelRow:hover { color: var(--cyan); }
-  #playerMeta {
-    display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px;
-    width: min(90vw, 480px);
-  }
-  #playerLink { font-size: 11.5px; color: var(--text-dim); }
-  #playerLink a { color: var(--cyan); }
-  #playerDate { font-size: 11.5px; color: var(--text-dim); }
 
-  /* TikTok-style right-bottom action rail, overlaid on the video itself
-     (anchored to #playerMediaWrap, see above) rather than sitting in the
-     document flow below it — score/labels/unfollow/unlist used to live in
-     an always-visible row under the video, but that ate space and pushed
-     the actual video down; now only Star and Watch later (the two
-     single-tap toggles) live in the rail directly, and everything else
-     (score, labels, Unfollow, Unlist) is tucked behind the tag icon, which
-     opens #playerSheet — same idea as TikTok hiding its comments behind
-     one icon instead of showing them inline. */
+  /* Thin scrub bar pinned to the very bottom edge of the screen, TikTok-
+     style, tracking the native <video>'s currentTime/duration via the
+     'timeupdate' listener below. YouTube's iframe embed doesn't expose
+     currentTime across origins without a much bigger postMessage polling
+     setup, so it just stays flat for YouTube videos. */
+  #playerProgressTrack {
+    position: absolute; left: 0; right: 0; bottom: env(safe-area-inset-bottom); height: 3px; z-index: 7;
+    background: rgba(255,255,255,0.25);
+  }
+  #playerProgressFill { height: 100%; width: 0%; background: var(--cyan); }
+
+  /* TikTok-style right-side action rail: Star and Watch later are direct
+     single-tap toggles; the tag icon opens #playerSheet below for
+     score/labels/Unfollow/Unlist instead of showing them inline. Hoisted
+     well clear of #playerInfoOverlay's bottom edge (rather than anchored
+     just above the video's native controls, as before) now that the
+     overlay holds a multi-line title/channel/date stack instead of a single
+     label row — a low, fixed offset would sit the rail on top of that text. */
   #playerRail {
-    position: absolute; right: 10px; bottom: 64px; z-index: 5;
-    /* bottom offset clears the native <video> control bar (and YouTube's
-       own bottom-right settings/fullscreen icons inside the iframe) —
-       16px overlapped them directly, confirmed via screenshot. */
+    position: absolute; right: max(10px, env(safe-area-inset-right)); bottom: clamp(160px, 26vh, 260px); z-index: 8;
     display: flex; flex-direction: column; align-items: center; gap: 16px;
   }
   .rail-btn {
@@ -407,11 +377,34 @@
   }
   .rail-badge.show { display: block; }
 
-  /* Bottom sheet for score + labels + Unfollow/Unlist — the "just like
-     TikTok comments" panel, hidden until #playerSheetToggle (the rail's tag
-     icon) opens it. Fixed/centered independently of #playerCard's own
-     fit-content width, since a bottom sheet reads better full-width (up to
-     a cap) than squeezed to match a narrow portrait video. */
+  /* Bottom info overlay: title, then channel name + published date on one
+     row, then the source link — stacked in that order per the TikTok-style
+     redesign. A gradient scrim keeps light text readable over bright video
+     frames. Font sizes use clamp() with a vw component so they scale with
+     the viewport itself (not a fixed px size), matching TikTok's fluid
+     caption text. right:76px keeps the text from running under #playerRail. */
+  #playerInfoOverlay {
+    position: absolute; left: 0; right: 76px; bottom: 0; z-index: 6;
+    max-width: 640px;
+    padding: 32px 10px max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.45) 65%, transparent);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  #playerTitleRow .title {
+    font-size: clamp(15px, 4.2vw, 20px); font-weight: 700; -webkit-line-clamp: 3; min-height: 0;
+    color: #fff;
+  }
+  #playerChannelRow {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    font-size: clamp(12px, 3.2vw, 14px); color: rgba(255,255,255,0.85);
+    cursor: pointer;
+  }
+  #playerChannelRow:hover { color: var(--cyan); }
+  #playerDate { color: rgba(255,255,255,0.65); }
+  #playerDate::before { content: '· '; }
+  #playerLink { font-size: clamp(10.5px, 2.8vw, 12px); color: rgba(255,255,255,0.6); margin-top: 2px; }
+  #playerLink a { color: var(--cyan); }
+
   #playerSheetBackdrop {
     display: none; position: fixed; inset: 0; z-index: 63;
     background: rgba(0,0,0,0.55);
@@ -465,10 +458,9 @@
 
   #playerCard iframe {
     display: block; border: 0; background: #000;
-    width: min(99vw, 960px); height: auto; aspect-ratio: 16 / 9;
-    max-width: 99vw; max-height: 95vh;
+    width: min(100vw, 960px); height: auto; aspect-ratio: 16 / 9;
+    max-width: 100vw; max-height: 100dvh;
     min-height: 0; /* same shrink-to-make-room fix as #playerCard video */
-    border-radius: var(--radius);
   }
   #playerCard iframe.hidden { display: none; }
 
@@ -556,25 +548,6 @@
     #playerClose { width: 38px; height: 38px; }
   }
 
-  @media (max-width: 640px) {
-    /* Edge-to-edge player: no rounded corners/side padding eating into a
-       narrow viewport's width, plus safe-area padding so the bottom action
-       row isn't sitting under an iPhone's home-indicator gesture bar. */
-    #playerOverlay { padding: 0; align-items: stretch; }
-    #playerCard {
-      width: 100vw; max-width: 100vw; min-width: 0;
-      padding: max(10px, env(safe-area-inset-top)) 0 max(10px, env(safe-area-inset-bottom));
-      justify-content: center;
-    }
-    #playerCard video, #playerCard iframe { max-width: 100vw; border-radius: 0; }
-    #playerTitleRow, #playerChannelRow, #playerMeta, #playerFallback {
-      width: min(94vw, 480px);
-    }
-    /* The "Open on Douyin/YouTube" source link is redundant clutter once
-       you're already watching in-app on a small screen. Desktop keeps it
-       since there's room to spare. */
-    #playerLink { display: none; }
-  }
 </style>
 </head>
 <body>
@@ -643,14 +616,7 @@
 
 <div id="playerOverlay">
   <div id="playerCard">
-    <div id="playerTitleRow">
-      <div class="title" id="playerTitle"></div>
-      <button id="playerClose" aria-label="Close">✕</button>
-    </div>
-    <div id="playerChannelRow">
-      <span class="platform-badge" id="playerPlatformBadge"></span>
-      <span id="playerChannelName"></span>
-    </div>
+    <button id="playerClose" aria-label="Close">✕</button>
     <div id="playerMediaWrap">
       <span id="speedBadge"></span>
       <video id="playerVideo" controls autoplay playsinline></video>
@@ -659,7 +625,8 @@
         <p id="playerFallbackMsg">Playback isn't available right now — this can happen either because the video was synced before we started saving playable links, or because Douyin's saved link expired (its signed CDN URL is only valid for about a day).</p>
         <button id="playerRefreshBtn">Refresh link</button>
       </div>
-      <!-- TikTok-style right-bottom action rail: Star and Watch later are
+      <div id="playerProgressTrack"><div id="playerProgressFill"></div></div>
+      <!-- TikTok-style right-side action rail: Star and Watch later are
            direct single-tap toggles; the tag icon opens #playerSheet below
            for score/labels/Unfollow/Unlist instead of showing them inline. -->
       <div id="playerRail">
@@ -669,10 +636,21 @@
           🏷<span class="rail-badge" id="playerRailBadge"></span>
         </button>
       </div>
-    </div>
-    <div id="playerMeta">
-      <div id="playerDate"></div>
-      <div id="playerLink"><a id="playerSourceLink" href="#" target="_blank" rel="noopener"></a></div>
+      <!-- Title below the player, channel name under the title, published
+           date after the channel name — overlaid on the video's bottom edge
+           since the video itself is full-viewport and leaves no flow room
+           below it. -->
+      <div id="playerInfoOverlay">
+        <div id="playerTitleRow">
+          <div class="title" id="playerTitle"></div>
+        </div>
+        <div id="playerChannelRow">
+          <span class="platform-badge" id="playerPlatformBadge"></span>
+          <span id="playerChannelName"></span>
+          <span id="playerDate"></span>
+        </div>
+        <div id="playerLink"><a id="playerSourceLink" href="#" target="_blank" rel="noopener"></a></div>
+      </div>
     </div>
   </div>
 </div>
@@ -782,6 +760,7 @@ const playerPlatformBadge = document.getElementById('playerPlatformBadge');
 const playerChannelName = document.getElementById('playerChannelName');
 const playerSourceLink = document.getElementById('playerSourceLink');
 const playerDate = document.getElementById('playerDate');
+const playerProgressFill = document.getElementById('playerProgressFill');
 const playerUnfollowBtn = document.getElementById('playerUnfollowBtn');
 const playerClose = document.getElementById('playerClose');
 const speedBadge = document.getElementById('speedBadge');
@@ -855,6 +834,9 @@ function openPlayer(v) {
   playerOverlay.classList.add('show');
   currentPlatform = v.platform;
   currentVideo = v;
+  playerProgressFill.style.width = '0%'; // reset for the new video — the
+    // native <video>'s 'timeupdate' listener below fills this back in;
+    // YouTube's iframe can't report progress across origins, so it stays 0%
 
   if (v.platform === 'youtube') {
     // YouTube videos play via the official embed iframe — no CDN proxying
@@ -990,6 +972,14 @@ playerVideo.addEventListener('loadedmetadata', () => {
   if (playerVideo.videoWidth && playerVideo.videoHeight) {
     playerVideo.style.aspectRatio = `${playerVideo.videoWidth} / ${playerVideo.videoHeight}`;
   }
+});
+
+// Drives #playerProgressTrack's fill, TikTok-style — only fires for the
+// native <video> (Douyin); the YouTube iframe never triggers this listener
+// since progress lives in a cross-origin document we can't observe.
+playerVideo.addEventListener('timeupdate', () => {
+  if (!isFinite(playerVideo.duration) || playerVideo.duration <= 0) return;
+  playerProgressFill.style.width = `${(playerVideo.currentTime / playerVideo.duration) * 100}%`;
 });
 
 const VOLUME_STEP = 10; // percentage points, 0-100 scale (matches YouTube's IFrame API)
