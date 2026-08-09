@@ -797,6 +797,32 @@ let currentVideo = null;
 let creatorsByName = {}; // populated by loadCreators(); {name: {platform, unlisted, ...}} — used by the channel header's Unlist button, which needs a creator's platform even though the grid only filters by name
 let ytPlaying = true;
 let ytVolume = 100;
+let ytFallbackTimer = null;
+// YouTube sometimes serves an interstitial ("Sign in to confirm you're not
+// a bot") in place of the actual embedded player — a plain HTML page inside
+// the iframe, not the JS player, so it's cross-origin-invisible to us and
+// never fires an error event. But the real player starts broadcasting
+// postMessage traffic (the same channel setPlaybackRate/ytCommand already
+// use) within a second or two of loading; the interstitial never does. So
+// silence past this timeout after (re)loading the iframe is used as a proxy
+// for "this is the bot wall, not just a slow connection" — confirmed
+// 2026-08-10, matches the Tasks.md report of playback failing with that
+// exact message.
+const YT_LOAD_TIMEOUT_MS = 9000;
+const YT_BLOCKED_MSG = "YouTube is showing its “Sign in to confirm you’re not a bot” page instead of the player — that's YouTube blocking the embed, not a problem with this video. It usually clears up on retry; you can also open it directly on YouTube using the link below the title.";
+
+function armYtFallbackTimer() {
+  clearTimeout(ytFallbackTimer);
+  ytFallbackTimer = setTimeout(() => {
+    if (currentPlatform !== 'youtube' || !currentVideo) return;
+    playerFrame.classList.add('hidden'); // same show/hide pairing as the
+      // Douyin <video> error path below — #playerFallback is a flex sibling,
+      // not an absolute overlay, so the blocked iframe must be hidden or
+      // both would render side by side
+    playerFallbackMsg.textContent = YT_BLOCKED_MSG;
+    playerFallback.classList.add('show');
+  }, YT_LOAD_TIMEOUT_MS);
+}
 const DEFAULT_PLAYBACK_RATE = 1.75;
 
 function fmtDate(iso) {
@@ -845,6 +871,10 @@ function openPlayer(v) {
   playerProgressFill.style.width = '0%'; // reset for the new video — the
     // native <video>'s 'timeupdate' listener below fills this back in;
     // YouTube's iframe can't report progress across origins, so it stays 0%
+  clearTimeout(ytFallbackTimer); // stop any pending "blocked" check armed for
+    // whatever was playing before — otherwise it could fire later and show
+    // the YouTube fallback message over an unrelated (possibly Douyin) video
+  playerRefreshBtn.textContent = v.platform === 'youtube' ? 'Retry' : 'Refresh link';
 
   if (v.platform === 'youtube') {
     // YouTube videos play via the official embed iframe — no CDN proxying
@@ -862,6 +892,7 @@ function openPlayer(v) {
     playerFallback.classList.remove('show');
     playerFrame.classList.remove('hidden');
     playerFrame.src = `https://www.youtube.com/embed/${v.id}?autoplay=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+    armYtFallbackTimer();
   } else {
     playerFrame.classList.add('hidden');
     playerFrame.src = 'about:blank';
@@ -1034,8 +1065,24 @@ playerVideo.addEventListener('error', () => {
 const playerRefreshBtn = document.getElementById('playerRefreshBtn');
 const playerFallbackMsg = document.getElementById('playerFallbackMsg');
 
+// Any postMessage from the embedded iframe — even a routine state-change
+// ping — proves the real YouTube player loaded rather than the "Sign in to
+// confirm you're not a bot" interstitial (see ytFallbackTimer above), so
+// cancel the pending "blocked" check as soon as one arrives.
+window.addEventListener('message', (event) => {
+  if (event.origin !== 'https://www.youtube.com' || currentPlatform !== 'youtube') return;
+  clearTimeout(ytFallbackTimer);
+});
+
 playerRefreshBtn.addEventListener('click', async () => {
   if (!currentVideo) return;
+  if (currentPlatform === 'youtube') {
+    playerFallback.classList.remove('show');
+    playerFrame.classList.remove('hidden');
+    playerFrame.src = `https://www.youtube.com/embed/${currentVideo.id}?autoplay=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+    armYtFallbackTimer();
+    return;
+  }
   playerRefreshBtn.disabled = true;
   playerRefreshBtn.textContent = 'Refreshing…';
   try {
@@ -1060,6 +1107,7 @@ function closePlayer() {
   playerOverlay.classList.remove('show');
   closeSheet(); // reset for next open — otherwise the sheet could reopen already-expanded on an unrelated video
   unlockBodyScroll();
+  clearTimeout(ytFallbackTimer);
   playerVideo.pause();
   playerVideo.removeAttribute('src');
   playerVideo.load();

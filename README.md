@@ -480,6 +480,16 @@ cards that appear (title, channel, video id, thumbnail, relative time text).
   card doesn't reliably expose a per-channel avatar image the way Douyin's
   follow sidebar does, so YouTube creator rows just have no avatar (the UI
   hides the broken-image icon via `onerror`).
+- **YouTube sometimes blocks the embed with a "Sign in to confirm you're not
+  a bot" interstitial** instead of serving the real player — a plain HTML
+  page inside the cross-origin iframe, invisible to our JS and silent (no
+  `error` event). `ui.html`'s `openPlayer`/retry paths arm a 9s timer
+  (`armYtFallbackTimer`) that shows the existing playback-fallback UI unless
+  a postMessage arrives from the iframe first (the real player starts
+  broadcasting almost immediately; the interstitial never does). This can't
+  be fixed server-side — it's YouTube's own bot detection on the viewer's
+  IP — so the fallback just gives a clear message plus Retry / "Open on
+  YouTube" instead of a silently stuck player.
 
 ## Rules of thumb
 
