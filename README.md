@@ -188,11 +188,17 @@ Grid (player closed):
 
 Player (open):
 - `Space` — pause/resume
-- `↑`/`↓` — volume ±10%, clamped [0%, 100%] (playback speed is handled by an
-  external browser extension instead, not this app — see below)
+- `↑`/`↓` — volume ±10%, clamped [0%, 100%]
 - `←`/`→` — seek ±5s
 - `f` — toggle fullscreen (just the video/iframe, not the whole player card)
 - `Escape` / click outside / ✕ — close
+
+Playback defaults to 1.75x speed (`DEFAULT_PLAYBACK_RATE` in `ui.html`) —
+set directly via `playerVideo.playbackRate` for Douyin's native `<video>`,
+and via a `setPlaybackRate` postMessage command once YouTube's embed iframe
+finishes loading (has to wait for `load`, not `openPlayer()`'s `src`
+assignment, or the command lands before YouTube's own listener attaches and
+is silently dropped — same constraint as the volume/play/pause commands).
 
 All driven by one `document` keydown listener that branches on whether
 `#playerOverlay` has the `show` class — don't add a second listener, extend

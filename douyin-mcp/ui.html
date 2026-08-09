@@ -797,6 +797,7 @@ let currentVideo = null;
 let creatorsByName = {}; // populated by loadCreators(); {name: {platform, unlisted, ...}} — used by the channel header's Unlist button, which needs a creator's platform even though the grid only filters by name
 let ytPlaying = true;
 let ytVolume = 100;
+const DEFAULT_PLAYBACK_RATE = 1.75;
 
 function fmtDate(iso) {
   if (!iso) return '';
@@ -869,7 +870,7 @@ function openPlayer(v) {
     playerVideo.style.aspectRatio = ''; // clear any real ratio set for the
       // previous video so this one starts from the 9:16 CSS placeholder again
     playerVideo.src = `/api/play/${v.id}`;
-    playerVideo.playbackRate = 1;
+    playerVideo.playbackRate = DEFAULT_PLAYBACK_RATE;
   }
 
   if (!v.watched) {
@@ -1081,6 +1082,14 @@ function ytCommand(func, args = []) {
     JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com'
   );
 }
+
+// setPlaybackRate has to wait for the embedded YouTube page itself to load
+// (not just openPlayer() setting playerFrame.src) — sent any earlier, the
+// postMessage lands before YouTube's own listener is attached and is
+// silently dropped, same as setVolume/play/pauseVideo above.
+playerFrame.addEventListener('load', () => {
+  if (currentPlatform === 'youtube') ytCommand('setPlaybackRate', [DEFAULT_PLAYBACK_RATE]);
+});
 
 function togglePause() {
   if (currentPlatform === 'youtube') {
