@@ -1077,6 +1077,52 @@ playerChannelRow.addEventListener('click', () => {
   selectCreator(currentVideo.user);
 });
 
+// TikTok-style vertical swipe/scroll moves between videos in the currently
+// loaded list — but advancing to the NEXT video is gated on having both
+// rated (score) and tagged (label) the one currently open, so scrolling
+// can't be used to blow through the feed without engaging each video first.
+// Going back to the previous video is never gated.
+function isRatedAndTagged(v) {
+  return !!(v && v.interest_score && (v.labels || []).length);
+}
+
+let navLocked = false; // debounces both wheel (fires repeatedly per gesture) and touch swipes
+function goToVideo(delta) {
+  if (!currentVideo || navLocked) return;
+  const idx = currentVideos.findIndex(v => v.id === currentVideo.id);
+  if (idx === -1) return;
+  if (delta > 0 && !isRatedAndTagged(currentVideo)) {
+    showBadge('Rate & tag to continue ↑');
+    openSheet();
+    return;
+  }
+  const nextIdx = idx + delta;
+  if (nextIdx < 0 || nextIdx >= currentVideos.length) return;
+  navLocked = true;
+  openPlayer(currentVideos[nextIdx]);
+  setTimeout(() => { navLocked = false; }, 400);
+}
+
+playerOverlay.addEventListener('wheel', (e) => {
+  if (!playerOverlay.classList.contains('show') || navLocked) return;
+  if (Math.abs(e.deltaY) < 20) return;
+  e.preventDefault();
+  goToVideo(e.deltaY > 0 ? 1 : -1);
+}, { passive: false });
+
+const SWIPE_THRESHOLD_PX = 60;
+let touchStartY = null;
+playerOverlay.addEventListener('touchstart', (e) => {
+  touchStartY = e.touches[0].clientY;
+}, { passive: true });
+playerOverlay.addEventListener('touchend', (e) => {
+  if (touchStartY === null || navLocked) return;
+  const dy = touchStartY - e.changedTouches[0].clientY;
+  touchStartY = null;
+  if (Math.abs(dy) < SWIPE_THRESHOLD_PX) return;
+  goToVideo(dy > 0 ? 1 : -1);
+}, { passive: true });
+
 function ytCommand(func, args = []) {
   playerFrame.contentWindow.postMessage(
     JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com'
