@@ -381,8 +381,8 @@
   }
   .rail-badge.show { display: block; }
 
-  /* Bottom info overlay: title, then channel name + published date on one
-     row, then the source link — stacked in that order per the TikTok-style
+  /* Bottom info overlay: title, then the source link, then channel name +
+     published date on one row — stacked in that order per the TikTok-style
      redesign. A gradient scrim keeps light text readable over bright video
      frames. Font sizes use clamp() with a vw component so they scale with
      the viewport itself (not a fixed px size), matching TikTok's fluid
@@ -651,12 +651,12 @@
         <div id="playerTitleRow">
           <div class="title" id="playerTitle"></div>
         </div>
+        <div id="playerLink"><a id="playerSourceLink" href="#" target="_blank" rel="noopener"></a></div>
         <div id="playerChannelRow">
           <span class="platform-badge" id="playerPlatformBadge"></span>
           <span id="playerChannelName"></span>
           <span id="playerDate"></span>
         </div>
-        <div id="playerLink"><a id="playerSourceLink" href="#" target="_blank" rel="noopener"></a></div>
       </div>
     </div>
   </div>
