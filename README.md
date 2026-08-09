@@ -167,6 +167,8 @@ Code chat session.
 | `POST /api/videos/{id}/score` | Body `{"score": 1-5\|null}` — subjective, always user-set, never inferred |
 | `POST /api/videos/{id}/labels` | Body `{"labels": ["ai_tech", ...]}` — manual override of auto-classified labels |
 | `POST /api/videos/{id}/starred` | Body `{"starred": true\|false}` — plain bookmark flag, independent of watched/score, for a later review pass |
+| `POST /api/videos/{id}/watch_later` | Body `{"watch_later": true\|false}` — queue flag for long videos, independent of starred/score |
+| `GET /api/videos/recommended?limit=40` | Top `limit` unwatched videos ranked by `recommend_score` (blends interest_score, starred, watch_later, and label affinity) — see "Recommended Top 40" below |
 | `POST /api/labels/backfill` | Re-runs the keyword classifier (see "Interest labels" below) over every row, overwriting any manual label edits |
 | `GET /api/creators?platform=` | Creators (name, avatar, unread/unwatched counts) for the sidebar, optionally filtered by platform |
 | `GET /api/play/{id}` | Proxies a **Douyin** video's actual playable stream (see below) — YouTube videos instead play via the official `youtube.com/embed/{id}` iframe, no proxying needed |
@@ -383,6 +385,38 @@ check: inspect a real followed-creator profile / subscribed-channel page
 with devtools and update `DOUYIN_FOLLOWED_BUTTON_SELECTOR`/
 `DOUYIN_UNFOLLOW_CONFIRM_SELECTOR` in `server.py` or `CHANNEL_LINK_SELECTOR`/
 `SUBSCRIBE_BUTTON_SELECTOR`/`UNSUBSCRIBE_CONFIRM_SELECTOR` in `youtube.py`.
+
+## Recommended Top 40 (added 2026-08-10)
+
+For when the unwatched pile grows past what's actually browsable: a
+**🎯 Recommended** button in the header (`#recommendedBtn`, next to "Watch
+later only") switches the grid from the normal filtered list to the top 40
+unwatched videos by a computed `recommend_score`, via `GET
+/api/videos/recommended?limit=40` (`api_recommended` in `server.py`). While
+active, the other filter controls are disabled (`setRecommendedMode` in
+`ui.html`) since the recommended pool ignores them — it's always drawn from
+unwatched, non-filtered-category, non-unlisted-creator videos, same base
+set as the default grid view. Picking a creator from the sidebar exits
+recommended mode automatically (`selectCreator`), since a single-creator
+filter doesn't compose with a cross-feed ranking.
+
+The score deliberately reuses the existing marking dimensions instead of
+calling out to any model — per-video:
+```
+own interest_score * 2         (explicit, if this specific video was pre-scored)
++ 3 if starred                 (explicit "come back to this")
++ 2 if watch_later             (explicit "queued")
++ avg(interest_score) of other already-scored videos sharing a label
+```
+The label-affinity term is the only thing that generalizes past ratings to
+videos that were never individually scored — it's computed once per request
+over every row with a non-null `interest_score` (regardless of watched
+state), then averaged per label. Ties — including the common cold-start
+case where nothing has been marked yet, so every video scores 0 — fall back
+to `published_at` desc, so the feature still does something useful (surface
+the newest 40) before any marking has happened. Same JSON video shape as
+`GET /api/videos` (plus `recommend_score`), so it reuses `card()`/
+`openPlayer()`/keyboard shortcuts in `ui.html` unchanged.
 
 ## How the feed sync actually works (read before touching `server.py`)
 

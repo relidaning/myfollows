@@ -902,6 +902,65 @@ async def api_videos(request: Request) -> Response:
     return JSONResponse({"videos": videos, "users": users, "label_categories": label_categories})
 
 
+@mcp.custom_route("/api/videos/recommended", methods=["GET"])
+async def api_recommended(request: Request) -> Response:
+    """Ranks unwatched, non-filtered, non-unlisted videos and returns the
+    top `limit` (default 40) — a way to cut an overwhelming backlog down to
+    a manageable slice using signals already in the DB instead of adding a
+    new ML/LLM dependency. Score per video is:
+      own interest_score * 2   (explicit, if this particular video was pre-scored)
+    + 3 if starred            (explicit "come back to this")
+    + 2 if watch_later        (explicit "queued")
+    + avg interest_score of OTHER already-scored videos sharing a label
+      (the only signal that generalizes past ratings to unscored videos)
+    Ties (including the common all-zero case, e.g. a fresh DB with nothing
+    marked yet) fall back to published_at desc, so the feature still does
+    something useful — surface the newest 40 — before any marking has
+    happened. See README's "Recommended Top 40" section for the rationale."""
+    limit = int(request.query_params.get("limit", 40))
+
+    conn = _db()
+    rows = conn.execute(
+        f"SELECT {', '.join('v.' + c for c in _VIDEO_COLUMNS)}, COALESCE(cr.unlisted, 0) "
+        "FROM videos v LEFT JOIN creators cr ON cr.platform = v.platform AND cr.name = v.user "
+        "WHERE v.watched = 0 AND v.filtered_category IS NULL AND COALESCE(cr.unlisted, 0) = 0"
+    ).fetchall()
+    scored_rows = conn.execute(
+        "SELECT labels, interest_score FROM videos WHERE interest_score IS NOT NULL"
+    ).fetchall()
+    conn.close()
+
+    label_totals: dict[str, list[int]] = {}
+    for labels_str, score in scored_rows:
+        for label in (labels_str or "").split(","):
+            if label:
+                label_totals.setdefault(label, []).append(score)
+    label_affinity = {label: sum(scores) / len(scores) for label, scores in label_totals.items()}
+
+    videos = [dict(zip(_VIDEO_COLUMNS + ["unlisted"], row)) for row in rows]
+    for v in videos:
+        v["watched"] = bool(v["watched"])
+        v["starred"] = bool(v["starred"])
+        v["watch_later"] = bool(v["watch_later"])
+        v["unlisted"] = bool(v["unlisted"])
+        v["labels"] = v["labels"].split(",") if v["labels"] else []
+
+        rec_score = 0.0
+        if v["interest_score"]:
+            rec_score += v["interest_score"] * 2
+        if v["starred"]:
+            rec_score += 3
+        if v["watch_later"]:
+            rec_score += 2
+        affinities = [label_affinity[label] for label in v["labels"] if label in label_affinity]
+        if affinities:
+            rec_score += sum(affinities) / len(affinities)
+        v["recommend_score"] = round(rec_score, 2)
+
+    videos.sort(key=lambda v: (v["recommend_score"], v["published_at"] or ""), reverse=True)
+    return JSONResponse({"videos": videos[:limit]})
+
+
 @mcp.custom_route("/api/videos/{video_id}/watched", methods=["POST"])
 async def api_toggle_watched(request: Request) -> Response:
     video_id = request.path_params["video_id"]

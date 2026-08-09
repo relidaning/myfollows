@@ -76,6 +76,7 @@
   }
   button.primary:hover { background: #fff; }
   button:disabled { opacity: 0.5; cursor: default; transform: none; }
+  #recommendedBtn.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; font-weight: 600; }
   label.check {
     display: flex; align-items: center; gap: 6px;
     font-size: 13px; color: var(--text-dim);
@@ -577,6 +578,7 @@
     <label class="check"><input type="checkbox" id="showUnlisted"> Show unlisted</label>
     <label class="check"><input type="checkbox" id="starredOnly"> Starred only</label>
     <label class="check"><input type="checkbox" id="watchLaterOnly"> Watch later only</label>
+    <button id="recommendedBtn" title="Rank unwatched videos by score/star/watch-later/label affinity and show only the top 40 — for when the feed feels overwhelming">🎯 Recommended</button>
     <button id="backfillBtn" title="Fetch playable links for videos synced before in-page playback existed">Fix old links</button>
     <button class="primary" id="syncBtn">Sync Douyin</button>
     <button id="ytLoginBtn">Login to YouTube</button>
@@ -688,6 +690,8 @@ const showFiltered = document.getElementById('showFiltered');
 const showUnlisted = document.getElementById('showUnlisted');
 const starredOnly = document.getElementById('starredOnly');
 const watchLaterOnly = document.getElementById('watchLaterOnly');
+const recommendedBtn = document.getElementById('recommendedBtn');
+let recommendedMode = false;
 const syncBtn = document.getElementById('syncBtn');
 const backfillBtn = document.getElementById('backfillBtn');
 const syncStatus = document.getElementById('syncStatus');
@@ -1481,6 +1485,7 @@ async function toggleWatched(id, watched) {
 
 function selectCreator(user) {
   activeUser = user;
+  if (recommendedMode) setRecommendedMode(false); // creator filter doesn't apply to the recommended pool
   renderCreatorActiveState();
   renderChannelHeader();
   loadVideos();
@@ -1556,7 +1561,33 @@ let currentVideos = [];
 let labelFilterPopulated = false;
 let allLabelCategories = [];
 
+function setRecommendedMode(on) {
+  recommendedMode = on;
+  recommendedBtn.classList.toggle('active', on);
+  // The other filters don't apply to /api/videos/recommended (it always
+  // ranks the same unwatched/non-filtered/non-unlisted pool), so grey them
+  // out rather than leave them checked-but-silently-ignored.
+  [unwatchedOnly, showFiltered, showUnlisted, starredOnly, watchLaterOnly, platformFilter, labelFilter]
+    .forEach(el => { el.disabled = on; });
+}
+
 async function loadVideos() {
+  if (recommendedMode) {
+    const res = await fetch('/api/videos/recommended?limit=40');
+    const data = await res.json();
+    currentVideos = data.videos;
+    grid.innerHTML = '';
+    if (data.videos.length === 0) {
+      empty.style.display = 'block';
+      emptyMsg.textContent = "You're caught up — nothing unwatched to recommend from.";
+    } else {
+      empty.style.display = 'none';
+      data.videos.forEach(v => grid.appendChild(card(v)));
+    }
+    countLabel.textContent = data.videos.length ? ` · ${data.videos.length} recommended` : '';
+    return;
+  }
+
   const params = new URLSearchParams();
   if (unwatchedOnly.checked) params.set('watched', 'false');
   if (showFiltered.checked) params.set('show_filtered', 'true');
@@ -1746,6 +1777,7 @@ starredOnly.addEventListener('change', loadVideos);
 watchLaterOnly.addEventListener('change', loadVideos);
 platformFilter.addEventListener('change', () => { loadVideos(); loadCreators(); });
 labelFilter.addEventListener('change', loadVideos);
+recommendedBtn.addEventListener('click', () => { setRecommendedMode(!recommendedMode); loadVideos(); });
 syncBtn.addEventListener('click', runSync);
 backfillBtn.addEventListener('click', runBackfill);
 ytLoginBtn.addEventListener('click', startYoutubeLogin);
