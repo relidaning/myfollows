@@ -285,6 +285,15 @@
     background: #000;
     display: none; align-items: stretch; justify-content: stretch;
     padding: 0;
+    /* Without this, real phones can hand a vertical drag to the browser's
+       own gesture recognizer (pull-to-refresh, back/forward swipe) before
+       our touchend fires — that path ends in touchcancel, which nothing
+       listens for, so the swipe silently does nothing. touch-action: none
+       keeps the whole gesture under our own touchstart/touchend handlers.
+       Confirmed 2026-08-10: swipe worked in every code-level check but not
+       on a real phone until this was added — desktop/simulated touch events
+       don't exercise the OS gesture recognizer that this works around. */
+    touch-action: none;
   }
   #playerOverlay.show { display: flex; }
   #playerCard {
@@ -331,14 +340,18 @@
   #playerFallback p { margin: 0 0 12px; }
   #playerRefreshBtn { font-size: 12px; padding: 7px 14px; }
 
+  /* Deliberately understated now that vertical scroll/swipe is the primary
+     way to move between videos — this is just an escape hatch back to the
+     grid, not a control meant to draw the eye. */
   #playerClose {
     position: absolute; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right));
     z-index: 9;
-    background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.18); color: #fff;
-    width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+    background: rgba(0,0,0,0.15); border: none; color: rgba(255,255,255,0.55);
+    width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center; padding: 0;
+    font-size: 12px;
   }
-  #playerClose:hover { border-color: var(--coral); color: var(--coral); }
+  #playerClose:hover { color: var(--coral); }
 
   /* Thin scrub bar pinned to the very bottom edge of the screen, TikTok-
      style, tracking the native <video>'s currentTime/duration via the
@@ -469,6 +482,16 @@
   }
   #playerCard iframe.hidden { display: none; }
 
+  /* Sits directly on top of the YouTube iframe. A cross-origin iframe's
+     touches/wheel are handled entirely inside YouTube's own document and
+     never bubble to our touchstart/touchend/wheel listeners on
+     #playerOverlay — this same-document layer intercepts them first so
+     swipe-to-navigate and tap-to-pause (see playerYtCapture click/touch
+     listeners below) actually reach our code. Sits below the close button
+     and rail (z-index 8-9) so those stay clickable, above the iframe itself. */
+  #playerYtCapture { position: absolute; inset: 0; z-index: 6; }
+  #playerYtCapture.hidden { display: none; }
+
   .platform-badge {
     font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
     padding: 2px 6px; border-radius: 4px; color: #0b0b0d;
@@ -553,7 +576,6 @@
     .label-chip { padding: 8px 13px; font-size: 13.5px; }
     #playerSheetActions button { min-height: 44px; font-size: 13.5px; }
     #playerSheet .score-stars .star { font-size: 28px; }
-    #playerClose { width: 38px; height: 38px; }
   }
 
 </style>
@@ -630,6 +652,7 @@
       <span id="speedBadge"></span>
       <video id="playerVideo" autoplay playsinline></video>
       <iframe id="playerFrame" class="hidden" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+      <div id="playerYtCapture" class="hidden"></div>
       <div id="playerFallback">
         <p id="playerFallbackMsg">Playback isn't available right now — this can happen either because the video was synced before we started saving playable links, or because Douyin's saved link expired (its signed CDN URL is only valid for about a day).</p>
         <button id="playerRefreshBtn">Refresh link</button>
@@ -764,6 +787,7 @@ const creatorList = document.getElementById('creatorList');
 const playerOverlay = document.getElementById('playerOverlay');
 const playerVideo = document.getElementById('playerVideo');
 const playerFrame = document.getElementById('playerFrame');
+const playerYtCapture = document.getElementById('playerYtCapture');
 const playerFallback = document.getElementById('playerFallback');
 const playerTitle = document.getElementById('playerTitle');
 const playerChannelRow = document.getElementById('playerChannelRow');
@@ -823,6 +847,7 @@ function armYtFallbackTimer() {
       // Douyin <video> error path below — #playerFallback is a flex sibling,
       // not an absolute overlay, so the blocked iframe must be hidden or
       // both would render side by side
+    playerYtCapture.classList.add('hidden');
     playerFallbackMsg.textContent = YT_BLOCKED_MSG;
     playerFallback.classList.add('show');
   }, YT_LOAD_TIMEOUT_MS);
@@ -895,10 +920,12 @@ function openPlayer(v) {
     playerVideo.classList.add('hidden');
     playerFallback.classList.remove('show');
     playerFrame.classList.remove('hidden');
+    playerYtCapture.classList.remove('hidden');
     playerFrame.src = `https://www.youtube.com/embed/${v.id}?autoplay=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
     armYtFallbackTimer();
   } else {
     playerFrame.classList.add('hidden');
+    playerYtCapture.classList.add('hidden');
     playerFrame.src = 'about:blank';
     playerVideo.classList.remove('hidden');
     playerFallback.classList.remove('show');
@@ -1083,6 +1110,7 @@ playerRefreshBtn.addEventListener('click', async () => {
   if (currentPlatform === 'youtube') {
     playerFallback.classList.remove('show');
     playerFrame.classList.remove('hidden');
+    playerYtCapture.classList.remove('hidden');
     playerFrame.src = `https://www.youtube.com/embed/${currentVideo.id}?autoplay=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
     armYtFallbackTimer();
     return;
@@ -1116,9 +1144,16 @@ function closePlayer() {
   playerVideo.removeAttribute('src');
   playerVideo.load();
   playerFrame.src = 'about:blank';
+  playerYtCapture.classList.add('hidden');
 }
 
 playerClose.addEventListener('click', closePlayer);
+// Tapping/clicking the capture layer (see its definition above) is the only
+// way to pause a YouTube video by hand — the iframe itself is cross-origin
+// and never sees the click, and a swipe that crosses SWIPE_THRESHOLD_PX
+// doesn't fire a synthetic click (mobile browsers suppress it on real
+// finger movement), so this only fires for genuine taps, never swipes.
+playerYtCapture.addEventListener('click', togglePause);
 
 // Same behavior as clicking a creator's @name on a grid card — filters the
 // grid to just their videos. Closes the player first since the filtered
@@ -1174,6 +1209,11 @@ playerOverlay.addEventListener('touchend', (e) => {
   if (Math.abs(dy) < SWIPE_THRESHOLD_PX) return;
   goToVideo(dy > 0 ? 1 : -1);
 }, { passive: true });
+// A gesture the OS decides to intercept (e.g. as a system back/refresh
+// gesture) ends in touchcancel, not touchend — without this, touchStartY
+// stays set to a stale value and the next swipe's delta is measured from
+// the wrong starting point.
+playerOverlay.addEventListener('touchcancel', () => { touchStartY = null; }, { passive: true });
 
 function ytCommand(func, args = []) {
   playerFrame.contentWindow.postMessage(

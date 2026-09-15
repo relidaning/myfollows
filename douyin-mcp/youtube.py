@@ -29,6 +29,7 @@ but not exact to the second.
 
 import asyncio
 import datetime
+import logging
 import os
 import re
 from typing import Optional
@@ -37,6 +38,8 @@ from playwright.async_api import Page, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import common
+
+_log = logging.getLogger(__name__)
 
 YOUTUBE_HOME = "https://www.youtube.com/"
 SUBSCRIPTIONS_URL = "https://www.youtube.com/feed/subscriptions"
@@ -403,16 +406,66 @@ async def sync(limit: int = 30) -> dict:
     }
 
 
-# Best-effort — UNVERIFIED against a live session at write time (2026-07-29).
-# YouTube's DOM changes fairly often (see module docstring); if unsubscribing
-# silently reports failure, inspect a real channel page with devtools and
-# update these.
+# Best-effort — was UNVERIFIED against a live session as of 2026-07-29, and
+# confirmed broken 2026-08-03: `ytd-subscribe-button-renderer` matches *every*
+# subscribe button on a channel page, including the unrelated "featured
+# channels" recommendation grid further down — `.first` was grabbing one of
+# those instead of the page's own header button. The real header button (at
+# least on YouTube's current redesign) lives in `yt-subscribe-button-view-model`.
+# If unsubscribing silently reports failure again, inspect a real channel page
+# with devtools and update these.
 CHANNEL_LINK_SELECTOR = "ytd-video-owner-renderer a[href^='/@'], ytd-channel-name a[href^='/@']"
-SUBSCRIBE_BUTTON_SELECTOR = "ytd-subscribe-button-renderer button, tp-yt-paper-button#subscribe-button"
-UNSUBSCRIBE_CONFIRM_SELECTOR = (
-    "yt-confirm-dialog-renderer #confirm-button button, "
-    "tp-yt-paper-dialog button:has-text('Unsubscribe')"
-)
+SUBSCRIBE_BUTTON_SELECTOR = "yt-subscribe-button-view-model button"
+# Clicking an already-subscribed channel's button is a two-stage confirm,
+# not a direct unsubscribe (confirmed 2026-08-03):
+#   1. It opens a notification-preferences dropdown — "All"/"Personalized"/
+#      "None"/"Unsubscribe", rendered in the account's display language. The
+#      first three are `role="menuitemradio"`; only the actual Unsubscribe
+#      action is a plain `role="menuitem"`, a locale-independent way to
+#      target it without matching on translated text.
+#   2. That menu item then opens a second, final `yt-confirm-dialog-renderer`
+#      dialog with two buttons (Cancel, then Unsubscribe) — `.last` picks the
+#      real confirm regardless of display language, since it's always the
+#      second of a fixed two-button layout.
+UNSUBSCRIBE_MENU_ITEM_SELECTOR = "[role='menu'] [role='menuitem']"
+UNSUBSCRIBE_FINAL_CONFIRM_SELECTOR = "yt-confirm-dialog-renderer button"
+CHANNELS_MANAGE_URL = "https://www.youtube.com/feed/channels"
+
+
+async def _goto_retry(page, url: str, tries: int = 3) -> None:
+    """A plain page.goto with retries — this proxy (YOUTUBE_PROXY_SERVER)
+    times out intermittently on the first attempt (confirmed 2026-08-03,
+    unrelated to any particular URL), and a page that never loads at all is a
+    much worse failure mode here than a few extra seconds."""
+    last_exc = None
+    for _ in range(tries):
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            return
+        except PlaywrightTimeoutError as exc:
+            last_exc = exc
+            await page.wait_for_timeout(2000)
+    raise last_exc
+
+
+async def _is_subscribed(page, handle: str) -> bool:
+    """Locale-agnostic subscription check: does this channel's handle show up
+    as a link on the account's own /feed/channels list?
+
+    Far more reliable than reading the subscribe button's text (the previous
+    approach): that text renders in the account's own YouTube display
+    language, not the Playwright context's `locale` — confirmed 2026-08-03,
+    an account with its YouTube UI set to Chinese still showed "已订阅"/"订阅"
+    despite `locale="en-US"` on the browser context, so the old hardcoded
+    `"subscribed" not in btn_text` check could never have matched. Matching
+    on the handle in the URL sidesteps display language entirely.
+    """
+    await _goto_retry(page, CHANNELS_MANAGE_URL)
+    await page.wait_for_timeout(2000)
+    for _ in range(4):
+        await page.mouse.wheel(0, 2000)
+        await page.wait_for_timeout(400)
+    return await page.locator(f"a[href*='{handle}']").first.count() > 0
 
 
 async def unsubscribe(video_id: str) -> dict:
@@ -422,10 +475,12 @@ async def unsubscribe(video_id: str) -> dict:
     We don't store a stable channel URL for YouTube creators (only a
     display name, same limitation as Douyin's follow sidebar — see
     _scrape_subscriptions), so this resolves the channel fresh from the
-    video itself: opens the video's own watch page, follows its channel
-    link, then clicks the real Subscribed button. Reports {"ok": false}
-    honestly if the button still reads "Subscribed" afterward rather than
-    assuming success from a click not erroring.
+    video itself: opens the video's own watch page and follows its channel
+    link. Subscription state (before and after) is checked against
+    /feed/channels via _is_subscribed rather than the button's own text —
+    see that function's docstring for why. Reports {"ok": false} honestly if
+    the channel is still listed there afterward, rather than assuming
+    success from a click not erroring.
     """
     if not os.path.exists(common.YOUTUBE_STORAGE_STATE_PATH):
         return {"ok": False, "error": "Not logged in."}
@@ -434,9 +489,7 @@ async def unsubscribe(video_id: str) -> dict:
         ctx = await _get_headless_context(fresh=False)
         page = await ctx.new_page()
         try:
-            await page.goto(
-                f"https://www.youtube.com/watch?v={video_id}", wait_until="domcontentloaded", timeout=30000
-            )
+            await _goto_retry(page, f"https://www.youtube.com/watch?v={video_id}")
             channel_link = page.locator(CHANNEL_LINK_SELECTOR).first
             try:
                 await channel_link.wait_for(state="visible", timeout=10000)
@@ -449,29 +502,39 @@ async def unsubscribe(video_id: str) -> dict:
             href = await channel_link.get_attribute("href")
             if not href:
                 return {"ok": False, "error": "Channel link had no href."}
+            handle = href.rstrip("/").rsplit("/", 1)[-1]
             channel_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
+            _log.info("unsubscribe: resolved video %s -> channel %s (handle=%s)", video_id, channel_url, handle)
 
-            await page.goto(channel_url, wait_until="domcontentloaded", timeout=30000)
+            if not await _is_subscribed(page, handle):
+                _log.info("unsubscribe: %s already not subscribed per /feed/channels", handle)
+                return {"ok": True}  # nothing to undo
+
+            await _goto_retry(page, channel_url)
             sub_btn = page.locator(SUBSCRIBE_BUTTON_SELECTOR).first
             try:
                 await sub_btn.wait_for(state="visible", timeout=10000)
             except PlaywrightTimeoutError:
                 return {"ok": False, "error": "Could not find the subscribe button on the channel page."}
 
-            btn_text = ((await sub_btn.inner_text()) or "").strip().lower()
-            if "subscribed" not in btn_text:
-                return {"ok": True}  # already not subscribed, or button text differs — nothing to undo
-
             await sub_btn.click()
             try:
-                confirm_btn = page.locator(UNSUBSCRIBE_CONFIRM_SELECTOR).first
-                await confirm_btn.wait_for(state="visible", timeout=3000)
-                await confirm_btn.click()
+                menu_item = page.locator(UNSUBSCRIBE_MENU_ITEM_SELECTOR).first
+                await menu_item.wait_for(state="visible", timeout=3000)
+                await menu_item.click()
             except PlaywrightTimeoutError:
-                pass  # no confirmation dialog appeared — fine, not every account shows one
+                pass  # no notification-preferences dropdown appeared — fine, not every account shows one
+
+            try:
+                final_confirm = page.locator(UNSUBSCRIBE_FINAL_CONFIRM_SELECTOR).last
+                await final_confirm.wait_for(state="visible", timeout=3000)
+                await final_confirm.click()
+            except PlaywrightTimeoutError:
+                pass  # no second confirm dialog appeared — fine, not every account shows one
 
             await page.wait_for_timeout(1500)
-            new_text = ((await sub_btn.inner_text()) or "").strip().lower()
-            return {"ok": "subscribed" not in new_text}
+            still_subscribed = await _is_subscribed(page, handle)
+            _log.info("unsubscribe: %s still subscribed after click=%s", handle, still_subscribed)
+            return {"ok": not still_subscribed}
         finally:
             await page.close()
