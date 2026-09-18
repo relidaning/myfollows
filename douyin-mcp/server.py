@@ -1059,10 +1059,18 @@ async def api_labels_backfill(request: Request) -> Response:
 @mcp.custom_route("/api/videos/{video_id}/unfollow_creator", methods=["POST"])
 async def api_unfollow_creator(request: Request) -> Response:
     """Unfollows/unsubscribes from this video's creator on their actual
-    platform — a real, hard-to-reverse action on the live account, not just
-    a local DB change. On success, also removes the creator from the local
-    `creators` table so the sidebar reflects it immediately; already-synced
-    videos from them are left alone (historical data isn't undone)."""
+    platform, then always purges them locally — deletes the `creators` row
+    and every one of their videos, and records them in `blocked_creators` so
+    a later sync can't bring them back (see block_creator's docstring).
+
+    The local purge happens even if the live platform action fails/can't be
+    verified (both Douyin's and YouTube's unfollow automation are fragile —
+    selector drift is a known, recurring risk here), because the user-facing
+    requirement is "this creator disappears from the app," not "the app's
+    best-effort click on a third-party page succeeded." `live_unfollowed`
+    tells the caller whether the real account-level action is confirmed, so
+    the UI can warn that manual cleanup on the actual platform may still be
+    needed."""
     video_id = request.path_params["video_id"]
     conn = _db()
     row = conn.execute("SELECT platform, user FROM videos WHERE id = ?", (video_id,)).fetchone()
@@ -1076,12 +1084,13 @@ async def api_unfollow_creator(request: Request) -> Response:
     else:
         result = await _unfollow_douyin_creator(video_id)
 
-    if result.get("ok"):
-        conn = _db()
-        conn.execute("DELETE FROM creators WHERE platform = ? AND name = ?", (platform, creator))
-        conn.commit()
-        conn.close()
-    return JSONResponse(result)
+    deleted = common.block_creator(platform, creator)
+    return JSONResponse({
+        "ok": True,
+        "live_unfollowed": bool(result.get("ok")),
+        "live_error": result.get("error"),
+        "videos_deleted": deleted,
+    })
 
 
 @mcp.custom_route("/api/creators/unlist", methods=["POST"])
@@ -1125,7 +1134,9 @@ async def api_creators(request: Request) -> Response:
     if platform_param:
         query += " WHERE c.platform = ?"
         params.append(platform_param)
-    query += " ORDER BY unwatched_synced DESC, c.name ASC"
+    # Unlisted creators sort after listed ones (c.unlisted ASC: 0s first),
+    # keeping the existing unwatched-count/name ordering within each group.
+    query += " ORDER BY c.unlisted ASC, unwatched_synced DESC, c.name ASC"
     rows = conn.execute(query, params).fetchall()
     conn.close()
     creators = [

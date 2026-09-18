@@ -118,6 +118,24 @@ def _db() -> sqlite3.Connection:
         )
         """
     )
+    # Creators explicitly unfollowed through the app (see block_creator) —
+    # separate from `creators`/`unlisted` because that row (and the videos
+    # it owns) gets fully deleted on unfollow; this table is the only thing
+    # left to remember "don't bring them back" by. upsert_creators/
+    # upsert_videos consult it so a sync can't resurrect someone we've
+    # unfollowed just because the real platform-side unfollow silently
+    # failed (a known risk — see _unfollow_douyin_creator's docstring) and
+    # they're technically still in the live follow list.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS blocked_creators (
+            name TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            blocked_at TEXT,
+            PRIMARY KEY (platform, name)
+        )
+        """
+    )
     # CREATE TABLE IF NOT EXISTS doesn't add columns/change the PK of a table
     # created by an earlier schema version — migrate in place instead of
     # dropping data.
@@ -169,8 +187,17 @@ def _db() -> sqlite3.Connection:
 def upsert_videos(videos: list[dict], platform: str) -> tuple[int, int]:
     """Insert new videos; for ones already in the DB, backfill play_url/
     thumbnail_url if they were empty (covers rows synced before those fields
-    existed) without touching watched state. Returns (new_count, total)."""
+    existed) without touching watched state. Returns (new_count, total).
+
+    Videos from a blocked creator (see block_creator) are silently dropped
+    here rather than in the caller, so both platforms' sync paths get this
+    for free."""
     conn = _db()
+    blocked = {
+        row[0] for row in conn.execute("SELECT name FROM blocked_creators WHERE platform = ?", (platform,))
+    }
+    if blocked:
+        videos = [v for v in videos if v["user"] not in blocked]
     if not videos:
         total = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
         conn.close()
@@ -206,11 +233,18 @@ def upsert_videos(videos: list[dict], platform: str) -> tuple[int, int]:
 
 
 def upsert_creators(creators: list[dict], platform: str) -> None:
+    """Upserts scraped/subscribed creators — skips anyone blocked (see
+    block_creator) so a sync can't re-add a row we deliberately deleted."""
     if not creators:
         return
     conn = _db()
+    blocked = {
+        row[0] for row in conn.execute("SELECT name FROM blocked_creators WHERE platform = ?", (platform,))
+    }
     now = datetime.datetime.now().isoformat(timespec="seconds")
     for c in creators:
+        if c["name"] in blocked:
+            continue
         conn.execute(
             "INSERT INTO creators (name, platform, avatar_url, unread_count, updated_at) VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(platform, name) DO UPDATE SET avatar_url=excluded.avatar_url, "
@@ -219,3 +253,24 @@ def upsert_creators(creators: list[dict], platform: str) -> None:
         )
     conn.commit()
     conn.close()
+
+
+def block_creator(platform: str, name: str) -> int:
+    """Marks a creator as unfollowed-by-the-app: records them in
+    blocked_creators (so future syncs skip them even if the real platform
+    unfollow failed — see the table's own docstring), then deletes their
+    existing creators row and all their videos. Returns the number of
+    videos deleted."""
+    conn = _db()
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        "INSERT INTO blocked_creators (name, platform, blocked_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(platform, name) DO UPDATE SET blocked_at = excluded.blocked_at",
+        (name, platform, now),
+    )
+    cur = conn.execute("DELETE FROM videos WHERE platform = ? AND user = ?", (platform, name))
+    deleted = cur.rowcount
+    conn.execute("DELETE FROM creators WHERE platform = ? AND name = ?", (platform, name))
+    conn.commit()
+    conn.close()
+    return deleted

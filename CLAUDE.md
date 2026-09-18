@@ -70,6 +70,11 @@ README/code.
   committed and was gone from `ui.html` by the very next session — so as of
   2026-08-09 the current code most likely still has this stall; re-apply if
   it resurfaces rather than assuming it's already fixed.
+- **YouTube's embed iframe only loops a single video with `loop=1&playlist=<id>` together** —
+  `loop=1` alone loops the surrounding "up next" queue instead of replaying
+  the current video. Used as of 2026-09-18 in `ui.html`'s auto-repeat
+  behavior for the playback page (the native Douyin `<video>` element just
+  gets the plain `loop` attribute).
 - **YouTube's embed iframe can silently substitute a "Sign in to confirm
   you're not a bot" interstitial for the real player**, with no client-side
   signal — it's a cross-origin page, so there's no `error` event to catch.
@@ -80,7 +85,16 @@ README/code.
   postMessage arrives from the iframe first — the real player starts
   broadcasting almost immediately, the interstitial never does. If YouTube
   changes embed behavior (e.g. delays the first postMessage past 9s even on
-  success), this heuristic will need retuning.
+  success), this heuristic will need retuning. Confirmed 2026-09-15: for one
+  user this fired on nearly every video, tracked down (via asking whether
+  they use a VPN/proxy) to a **full-tunnel VPN's exit IP** being flagged by
+  YouTube's embed-only bot detection — the same IP loads `youtube.com`
+  directly in a browser tab fine, because that stricter check applies only
+  to anonymous iframe embeds. A client-side silent-auto-retry-before-fallback
+  was tried and reverted (`ui.html`, briefly added and rolled back same
+  session) since a flagged VPN exit IP fails identically on every retry;
+  there is no code fix on our side for the VPN case, only split-tunneling
+  `youtube.com` out of the VPN on the client.
 - **The gated swipe/scroll navigation on the playback page (`ui.html`,
   added 2026-08-09) can silently fail on real phones in two distinct ways
   that don't reproduce in a desktop browser or simulated-touch testing —
@@ -105,3 +119,30 @@ README/code.
      screenshot verification (this repo's usual test method for `ui.html`)
      won't catch it — real on-device testing is required for any future
      touch/swipe work here.
+- **The live-platform "Unfollow"/"Unsubscribe" automation
+  (`_unfollow_douyin_creator` in `server.py`, `youtube.unsubscribe`) is
+  best-effort and known to fail silently on selector drift** — confirmed
+  2026-09-18: Douyin's `button:has-text('已关注')` selector (flagged
+  UNVERIFIED since 2026-07-29) couldn't find the follow button on a real
+  profile page, so the live unfollow never happened even though the app
+  reported the creator as removed. Because of this, `/api/videos/{id}/
+  unfollow_creator` (and the `Unfollow`/`Unsubscribe` button in `ui.html`)
+  no longer gate the local purge on the live action succeeding — it always
+  deletes the creator's `creators` row and all their videos, and records
+  them in a new `blocked_creators` table (`common.py`) that
+  `upsert_creators`/`upsert_videos` consult so a later sync can't
+  resurrect someone whose live unfollow silently failed. The response's
+  `live_unfollowed` field tells the caller whether the real platform
+  action was actually confirmed — if false, the user is still really
+  following/subscribed on the live account and needs to unfollow there by
+  hand until the selector is fixed. Fixing the Douyin selector itself
+  needs a real followed profile page inspected with devtools, same as the
+  original UNVERIFIED note asked for.
+- **The sidebar creator list and the `#showUnlisted` checkbox are now
+  linked** (as of 2026-09-18) — unlisted creators are hidden from
+  `#creatorList` by default and only reappear when `#showUnlisted` is
+  checked (`renderCreatorList` in `ui.html`), the same checkbox that
+  already controlled whether unlisted creators' videos show in the grid.
+  `/api/creators` itself still returns unlisted creators unconditionally
+  (filtering is client-side), so don't mistake that endpoint's raw output
+  for what the UI shows.

@@ -86,11 +86,36 @@
 
   #syncStatus { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 
-  /* On desktop this wrapper is transparent to layout — its children (the
-     platform/label selects, checkboxes, and sync buttons) flow directly
-     into the header's own flex row exactly as before it existed. Only the
-     mobile media query below turns it into an actual dropdown panel. */
-  #headerControls { display: contents; }
+  #searchBox {
+    font: inherit; color: var(--text);
+    background: #1d1d22; border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 12px;
+    min-width: 140px; max-width: 220px;
+    outline: none;
+  }
+  #searchBox:focus { border-color: var(--cyan); }
+  #searchBox::-webkit-search-cancel-button { cursor: pointer; }
+
+  /* Secondary filters (platform/label, show filtered/unlisted, fix old
+     links) live in this dropdown, opened via #toolsToggle — kept out of
+     the always-visible header row on every screen size, not just mobile. */
+  #headerControls {
+    display: none;
+    position: absolute; top: 100%; right: 14px; margin-top: 8px;
+    width: 280px;
+    flex-direction: column; align-items: stretch; gap: 10px;
+    padding: 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    max-height: min(70vh, 520px); overflow-y: auto; overscroll-behavior: contain;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.55);
+    z-index: 30;
+  }
+  #headerControls.open { display: flex; }
+  #headerControls select, #headerControls > button, #headerControls label.check {
+    width: 100%;
+  }
+  #headerControls > button { text-align: left; }
+  #toolsToggle { display: inline-flex; }
 
   .layout { display: flex; align-items: flex-start; max-width: 1600px; margin: 0 auto; }
 
@@ -499,10 +524,12 @@
   .platform-badge.douyin { background: var(--cyan); }
   .platform-badge.youtube { background: #ff4d4d; }
 
-  /* Mobile chrome: hamburger (creator drawer) + gear (filters/sync panel),
-     hidden on desktop where those controls already sit inline in the
-     header. Reuses the app's existing emoji-as-icon convention (☆★🕓✕)
-     instead of pulling in an icon font/SVG set. */
+  /* Mobile chrome: hamburger (creator drawer), hidden on desktop where the
+     sidebar is already visible. #toolsToggle (the gear) overrides this to
+     stay visible at every width — see #toolsToggle above — since the
+     filters panel it opens is now a dropdown on desktop too, not inline.
+     Reuses the app's existing emoji-as-icon convention (☆★🕓✕) instead of
+     pulling in an icon font/SVG set. */
   .icon-btn {
     display: none;
     width: 38px; height: 38px; flex-shrink: 0; padding: 0;
@@ -518,27 +545,12 @@
     .icon-btn { display: inline-flex; }
 
     #syncStatus { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+    #searchBox { max-width: none; flex: 1 1 100%; order: 1; }
 
-    /* On desktop #headerControls is `display:contents` so its children
-       (selects/checkboxes/sync buttons) flow directly into the header's own
-       flex row, unchanged from before this media query existed. On mobile
-       it becomes a real dropdown panel instead, anchored under the gear
-       button, so it never has to fight the header row for space. */
-    #headerControls {
-      display: none;
-      position: absolute; top: 100%; right: 14px; left: 14px; margin-top: 8px;
-      flex-direction: column; align-items: stretch; gap: 10px;
-      padding: 14px;
-      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-      max-height: min(70vh, 520px); overflow-y: auto; overscroll-behavior: contain;
-      box-shadow: 0 16px 40px rgba(0,0,0,0.55);
-      z-index: 30;
-    }
-    #headerControls.open { display: flex; }
-    #headerControls select, #headerControls > button, #headerControls label.check {
-      width: 100%;
-    }
-    #headerControls > button { text-align: left; }
+    /* #headerControls' panel styling is set unconditionally above; on
+       narrow screens it just spans full-width instead of the desktop's
+       fixed 280px anchored under the gear button. */
+    #headerControls { left: 14px; width: auto; }
 
     /* Off-canvas creator drawer, opened by #sidebarToggle. Covers the
        header area itself (z-index above it) with its own head row
@@ -585,7 +597,14 @@
 <header>
   <button id="sidebarToggle" class="icon-btn" aria-label="Creators">👥</button>
   <div class="brand"><span class="dot"></span>Follows<small id="countLabel"></small></div>
+  <input type="search" id="searchBox" placeholder="Search channels & videos…">
   <span id="syncStatus"></span>
+  <label class="check"><input type="checkbox" id="unwatchedOnly" checked> Unwatched only</label>
+  <label class="check"><input type="checkbox" id="starredOnly"> Starred only</label>
+  <label class="check"><input type="checkbox" id="watchLaterOnly"> Watch later only</label>
+  <button id="recommendedBtn" title="Rank unwatched videos by score/star/watch-later/label affinity and show only the top 40 — for when the feed feels overwhelming">🎯 Recommended</button>
+  <button class="primary" id="syncBtn">Sync</button>
+  <button id="reloginBtn">Relogin</button>
   <div id="headerControls">
     <select id="platformFilter">
       <option value="">All platforms</option>
@@ -595,18 +614,11 @@
     <select id="labelFilter">
       <option value="">All labels</option>
     </select>
-    <label class="check"><input type="checkbox" id="unwatchedOnly" checked> Unwatched only</label>
     <label class="check"><input type="checkbox" id="showFiltered"> Show filtered (gym/drawing)</label>
     <label class="check"><input type="checkbox" id="showUnlisted"> Show unlisted</label>
-    <label class="check"><input type="checkbox" id="starredOnly"> Starred only</label>
-    <label class="check"><input type="checkbox" id="watchLaterOnly"> Watch later only</label>
-    <button id="recommendedBtn" title="Rank unwatched videos by score/star/watch-later/label affinity and show only the top 40 — for when the feed feels overwhelming">🎯 Recommended</button>
     <button id="backfillBtn" title="Fetch playable links for videos synced before in-page playback existed">Fix old links</button>
-    <button class="primary" id="syncBtn">Sync Douyin</button>
-    <button id="ytLoginBtn">Login to YouTube</button>
-    <button id="ytSyncBtn">Sync YouTube</button>
   </div>
-  <button id="toolsToggle" class="icon-btn" aria-label="Filters and sync">⚙</button>
+  <button id="toolsToggle" class="icon-btn" aria-label="Filters" title="Platform, labels, show filtered/unlisted, fix old links">⚙</button>
 </header>
 
 <div id="sidebarBackdrop"></div>
@@ -650,7 +662,7 @@
     <button id="playerClose" aria-label="Close">✕</button>
     <div id="playerMediaWrap">
       <span id="speedBadge"></span>
-      <video id="playerVideo" autoplay playsinline></video>
+      <video id="playerVideo" autoplay playsinline loop></video>
       <iframe id="playerFrame" class="hidden" allow="autoplay; encrypted-media" allowfullscreen></iframe>
       <div id="playerYtCapture" class="hidden"></div>
       <div id="playerFallback">
@@ -724,8 +736,8 @@ const busyOverlay = document.getElementById('busyOverlay');
 const busyText = document.getElementById('busyText');
 const platformFilter = document.getElementById('platformFilter');
 const labelFilter = document.getElementById('labelFilter');
-const ytLoginBtn = document.getElementById('ytLoginBtn');
-const ytSyncBtn = document.getElementById('ytSyncBtn');
+const reloginBtn = document.getElementById('reloginBtn');
+const searchBox = document.getElementById('searchBox');
 const channelHeader = document.getElementById('channelHeader');
 const channelHeaderName = document.getElementById('channelHeaderName');
 const channelUnlistBtn = document.getElementById('channelUnlistBtn');
@@ -921,7 +933,10 @@ function openPlayer(v) {
     playerFallback.classList.remove('show');
     playerFrame.classList.remove('hidden');
     playerYtCapture.classList.remove('hidden');
-    playerFrame.src = `https://www.youtube.com/embed/${v.id}?autoplay=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+    // loop=1 only repeats a single video (rather than the whole "up next"
+    // queue) when paired with playlist=<same id> — YouTube's documented
+    // quirk for looping one embedded video.
+    playerFrame.src = `https://www.youtube.com/embed/${v.id}?autoplay=1&enablejsapi=1&loop=1&playlist=${v.id}&origin=${encodeURIComponent(location.origin)}`;
     armYtFallbackTimer();
   } else {
     playerFrame.classList.add('hidden');
@@ -1111,7 +1126,7 @@ playerRefreshBtn.addEventListener('click', async () => {
     playerFallback.classList.remove('show');
     playerFrame.classList.remove('hidden');
     playerYtCapture.classList.remove('hidden');
-    playerFrame.src = `https://www.youtube.com/embed/${currentVideo.id}?autoplay=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+    playerFrame.src = `https://www.youtube.com/embed/${currentVideo.id}?autoplay=1&enablejsapi=1&loop=1&playlist=${currentVideo.id}&origin=${encodeURIComponent(location.origin)}`;
     armYtFallbackTimer();
     return;
   }
@@ -1443,10 +1458,12 @@ playerUnlistBtn.addEventListener('click', async () => {
   await toggleUnlisted(currentVideo.platform, currentVideo.user, currentVideo.unlisted);
 });
 
-// Real, hard-to-reverse action on the live Douyin/YouTube account — not
-// just a local DB change (see /api/videos/{id}/unfollow_creator). Confirm
-// first, and be honest in the status text about failure (selector drift is
-// a real risk here, per the UNVERIFIED note on the backend functions).
+// Tries the real, hard-to-reverse unfollow/unsubscribe on the live
+// Douyin/YouTube account, then always purges the creator and all their
+// videos from this app regardless of whether that live action could be
+// confirmed (see /api/videos/{id}/unfollow_creator's docstring — the
+// automation is known-fragile, and the user-facing contract is "gone from
+// the app," not "the click on a third-party page definitely landed").
 playerUnfollowBtn.addEventListener('click', async () => {
   if (!currentVideo) return;
   const v = currentVideo;
@@ -1454,7 +1471,8 @@ playerUnfollowBtn.addEventListener('click', async () => {
   const actionLabel = v.platform === 'youtube' ? 'unsubscribe from' : 'unfollow';
   const ok = confirm(
     `Really ${actionLabel} ${v.user || 'this creator'} on ${platformLabel}? ` +
-    `This changes your actual ${platformLabel} account, not just this app.`
+    `This tries to change your actual ${platformLabel} account, and removes them ` +
+    `and all their videos from this app either way.`
   );
   if (!ok) return;
 
@@ -1464,8 +1482,13 @@ playerUnfollowBtn.addEventListener('click', async () => {
     const res = await fetch(`/api/videos/${v.id}/unfollow_creator`, { method: 'POST' });
     const data = await res.json();
     if (data.ok) {
-      syncStatus.textContent = `${v.platform === 'youtube' ? 'Unsubscribed from' : 'Unfollowed'} ${v.user}`;
-      playerUnfollowBtn.textContent = 'Done';
+      syncStatus.textContent = data.live_unfollowed
+        ? `${v.platform === 'youtube' ? 'Unsubscribed from' : 'Unfollowed'} ${v.user}`
+        : `Removed ${v.user} from the app, but the live ${platformLabel} ${actionLabel.split(' ')[0]} ` +
+          `couldn't be confirmed — you may still be following them there. ` +
+          `(${data.live_error || 'automation failed'})`;
+      closePlayer();
+      loadVideos();
       loadCreators();
     } else {
       syncStatus.textContent = data.error || 'Could not complete this — try again, or do it manually on the site.';
@@ -1560,13 +1583,14 @@ function renderCreatorActiveState() {
   });
 }
 
-async function loadCreators() {
-  const params = new URLSearchParams();
-  if (platformFilter.value) params.set('platform', platformFilter.value);
-  const res = await fetch('/api/creators?' + params.toString());
-  const data = await res.json();
+let lastCreators = [];
+
+// Rebuilds the sidebar from the last /api/creators response, filtered by
+// the search box's text — split out from loadCreators so search input
+// doesn't need a server round trip on every keystroke (see applySearch).
+function renderCreatorList() {
   creatorList.innerHTML = '';
-  creatorsByName = Object.fromEntries(data.creators.map(c => [c.name, c]));
+  creatorsByName = Object.fromEntries(lastCreators.map(c => [c.name, c]));
 
   const allRow = document.createElement('div');
   allRow.className = 'creator-row all';
@@ -1575,7 +1599,11 @@ async function loadCreators() {
   allRow.addEventListener('click', () => selectCreator(''));
   creatorList.appendChild(allRow);
 
-  data.creators.forEach(c => {
+  const q = searchBox.value.trim().toLowerCase();
+  let creators = showUnlisted.checked ? lastCreators : lastCreators.filter(c => !c.unlisted);
+  if (q) creators = creators.filter(c => c.name.toLowerCase().includes(q));
+
+  creators.forEach(c => {
     const row = document.createElement('div');
     row.className = 'creator-row' + (c.unlisted ? ' unlisted' : '');
     row.dataset.user = c.name;
@@ -1597,6 +1625,15 @@ async function loadCreators() {
   renderChannelHeader();
 }
 
+async function loadCreators() {
+  const params = new URLSearchParams();
+  if (platformFilter.value) params.set('platform', platformFilter.value);
+  const res = await fetch('/api/creators?' + params.toString());
+  const data = await res.json();
+  lastCreators = data.creators;
+  renderCreatorList();
+}
+
 let currentVideos = [];
 let labelFilterPopulated = false;
 let allLabelCategories = [];
@@ -1611,20 +1648,56 @@ function setRecommendedMode(on) {
     .forEach(el => { el.disabled = on; });
 }
 
+// Local text search over the title/channel of whatever the current filters
+// already produced — no server round trip, since /api/videos already
+// returns its whole matching set unpaginated (see loadVideos).
+function filterBySearch(videos) {
+  const q = searchBox.value.trim().toLowerCase();
+  if (!q) return videos;
+  return videos.filter(v =>
+    (v.title || '').toLowerCase().includes(q) || (v.user || '').toLowerCase().includes(q)
+  );
+}
+
+// Cached so the search box can re-filter locally (see applySearch) without
+// re-hitting the server on every keystroke.
+let lastRawVideos = [];
+let lastEmptyText = '';
+let lastSearchEmptyText = '';
+
+function renderGrid(rawVideos, emptyText, searchEmptyText) {
+  lastRawVideos = rawVideos;
+  lastEmptyText = emptyText;
+  lastSearchEmptyText = searchEmptyText;
+  const videos = filterBySearch(rawVideos);
+  currentVideos = videos;
+  grid.innerHTML = '';
+  if (videos.length === 0) {
+    empty.style.display = 'block';
+    emptyMsg.textContent = searchBox.value.trim() ? searchEmptyText : emptyText;
+  } else {
+    empty.style.display = 'none';
+    videos.forEach(v => grid.appendChild(card(v)));
+  }
+  countLabel.textContent = videos.length ? ` · ${videos.length}${recommendedMode ? ' recommended' : ''}` : '';
+}
+
+// Re-render from the last server response using the current search text —
+// called on searchBox input, cheaper than a full loadVideos() round trip.
+function applySearch() {
+  renderGrid(lastRawVideos, lastEmptyText, lastSearchEmptyText);
+  renderCreatorList();
+}
+
 async function loadVideos() {
   if (recommendedMode) {
     const res = await fetch('/api/videos/recommended?limit=40');
     const data = await res.json();
-    currentVideos = data.videos;
-    grid.innerHTML = '';
-    if (data.videos.length === 0) {
-      empty.style.display = 'block';
-      emptyMsg.textContent = "You're caught up — nothing unwatched to recommend from.";
-    } else {
-      empty.style.display = 'none';
-      data.videos.forEach(v => grid.appendChild(card(v)));
-    }
-    countLabel.textContent = data.videos.length ? ` · ${data.videos.length} recommended` : '';
+    renderGrid(
+      data.videos,
+      "You're caught up — nothing unwatched to recommend from.",
+      'No recommended videos match your search.'
+    );
     return;
   }
 
@@ -1640,7 +1713,6 @@ async function loadVideos() {
 
   const res = await fetch('/api/videos?' + params.toString());
   const data = await res.json();
-  currentVideos = data.videos;
 
   if (!labelFilterPopulated && data.label_categories) {
     labelFilterPopulated = true;
@@ -1653,36 +1725,44 @@ async function loadVideos() {
     });
   }
 
-  grid.innerHTML = '';
-  if (data.videos.length === 0) {
-    empty.style.display = 'block';
-    emptyMsg.textContent = unwatchedOnly.checked
+  renderGrid(
+    data.videos,
+    unwatchedOnly.checked
       ? "You're caught up — nothing unwatched. Try syncing, or uncheck \"Unwatched only\"."
-      : 'No videos match this filter.';
-  } else {
-    empty.style.display = 'none';
-    data.videos.forEach(v => grid.appendChild(card(v)));
-  }
-  countLabel.textContent = data.videos.length ? ` · ${data.videos.length}` : '';
+      : 'No videos match this filter.',
+    'No videos match your search.'
+  );
 }
 
+// Runs Douyin then YouTube sync back-to-back behind one button — mirrors
+// server.py's own _sync_both_platforms used for the startup/daily sync,
+// just driven from the client instead of over loopback.
 async function runSync() {
   syncBtn.disabled = true;
-  syncStatus.textContent = 'Syncing…';
   showBusy('Syncing your follow feed…');
+  const results = [];
+
+  syncStatus.textContent = 'Syncing Douyin…';
   try {
     const res = await fetch('/api/sync?limit=30', { method: 'POST' });
     const data = await res.json();
-    if (data.error) {
-      syncStatus.textContent = data.error;
-    } else {
-      syncStatus.textContent = `+${data.new} new (${data.total_in_db} total)`;
-      loadVideos();
-      loadCreators();
-    }
+    results.push(data.error ? `Douyin: ${data.error}` : `Douyin +${data.new} (${data.total_in_db})`);
   } catch (e) {
-    syncStatus.textContent = 'Sync failed — is the container running?';
+    results.push('Douyin sync failed');
   }
+
+  syncStatus.textContent = 'Syncing YouTube…';
+  try {
+    const res = await fetch('/api/youtube/sync?limit=30', { method: 'POST' });
+    const data = await res.json();
+    results.push(data.error ? `YouTube: ${data.error}` : `YouTube +${data.new} (${data.total_in_db})`);
+  } catch (e) {
+    results.push('YouTube sync failed');
+  }
+
+  syncStatus.textContent = results.join(' · ');
+  loadVideos();
+  loadCreators();
   hideBusy();
   syncBtn.disabled = false;
 }
@@ -1741,27 +1821,6 @@ async function startLogin() {
   }
 }
 
-async function runYoutubeSync() {
-  ytSyncBtn.disabled = true;
-  syncStatus.textContent = 'Syncing YouTube…';
-  showBusy('Syncing your YouTube subscriptions…');
-  try {
-    const res = await fetch('/api/youtube/sync?limit=30', { method: 'POST' });
-    const data = await res.json();
-    if (data.error) {
-      syncStatus.textContent = data.error;
-    } else {
-      syncStatus.textContent = `YouTube: +${data.new} new (${data.total_in_db} total)`;
-      loadVideos();
-      loadCreators();
-    }
-  } catch (e) {
-    syncStatus.textContent = 'YouTube sync failed — is the container running?';
-  }
-  hideBusy();
-  ytSyncBtn.disabled = false;
-}
-
 let ytPollTimer = null;
 
 function stopYoutubeLoginPoll() {
@@ -1773,13 +1832,11 @@ async function pollYoutubeLogin() {
   const data = await res.json();
   if (data.logged_in) {
     stopYoutubeLoginPoll();
-    updateYoutubeLoginButton(true);
     syncStatus.textContent = 'Logged in to YouTube';
   }
 }
 
 async function startYoutubeLogin() {
-  ytLoginBtn.disabled = true;
   try {
     const res = await fetch('/api/youtube/login/start', { method: 'POST' });
     const data = await res.json();
@@ -1793,26 +1850,25 @@ async function startYoutubeLogin() {
   } catch (e) {
     syncStatus.textContent = 'Could not reach the server to start YouTube login';
   }
-  ytLoginBtn.disabled = false;
 }
 
-function updateYoutubeLoginButton(loggedIn) {
-  ytLoginBtn.textContent = loggedIn ? 'Re-login to YouTube' : 'Login to YouTube';
-}
-
-async function initYoutubeStatus() {
-  try {
-    const res = await fetch('/api/youtube/status');
-    const data = await res.json();
-    updateYoutubeLoginButton(!!data.logged_in);
-  } catch (e) {
-    // server not reachable yet — leave default button label
-  }
+// One button drives both platforms' login flows at once: Douyin's QR
+// overlay (always the automatic behavior when logged out — see
+// checkLogin/startLogin) and YouTube's headed-Chromium popup, so the user
+// doesn't have to know which one is actually stale before clicking.
+async function runRelogin() {
+  reloginBtn.disabled = true;
+  loginOverlay.classList.add('show');
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(checkLogin, 2500);
+  startLogin();
+  await startYoutubeLogin();
+  reloginBtn.disabled = false;
 }
 
 unwatchedOnly.addEventListener('change', loadVideos);
 showFiltered.addEventListener('change', loadVideos);
-showUnlisted.addEventListener('change', loadVideos);
+showUnlisted.addEventListener('change', () => { loadVideos(); renderCreatorList(); });
 starredOnly.addEventListener('change', loadVideos);
 watchLaterOnly.addEventListener('change', loadVideos);
 platformFilter.addEventListener('change', () => { loadVideos(); loadCreators(); });
@@ -1820,15 +1876,14 @@ labelFilter.addEventListener('change', loadVideos);
 recommendedBtn.addEventListener('click', () => { setRecommendedMode(!recommendedMode); loadVideos(); });
 syncBtn.addEventListener('click', runSync);
 backfillBtn.addEventListener('click', runBackfill);
-ytLoginBtn.addEventListener('click', startYoutubeLogin);
-ytSyncBtn.addEventListener('click', runYoutubeSync);
+reloginBtn.addEventListener('click', runRelogin);
+searchBox.addEventListener('input', applySearch);
 
 (async function init() {
   const loggedIn = await checkLogin();
   if (!loggedIn) {
     pollTimer = setInterval(checkLogin, 2500);
   }
-  initYoutubeStatus();
 })();
 </script>
 </body>
