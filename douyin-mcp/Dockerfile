@@ -21,7 +21,10 @@ COPY server.py common.py youtube.py ui.html .
 
 EXPOSE 8082
 
+# /healthz, not /mcp: every GET /mcp opens an MCP session that is never
+# closed, so a 30s probe there leaked ~145 MiB/day (see server.py healthz).
+# -f makes a 4xx/5xx count as unhealthy instead of passing silently.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -s --max-time 4 http://localhost:8082/mcp > /dev/null || exit 1
+    CMD curl -sf --max-time 4 http://localhost:8082/healthz > /dev/null || exit 1
 
 CMD ["python", "server.py"]

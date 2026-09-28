@@ -27,3 +27,10 @@ services:
       # proxy ever moves; leave unset (empty string) to disable proxying.
       - YOUTUBE_PROXY_SERVER=http://127.0.0.1:10808
     restart: unless-stopped
+    # Docker's json-file driver has no size cap by default; uvicorn logs
+    # every request (the healthcheck alone is 2880/day), so bound it.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

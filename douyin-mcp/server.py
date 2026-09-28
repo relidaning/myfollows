@@ -30,7 +30,7 @@ from fastmcp import FastMCP
 from playwright.async_api import Page, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 
 import common
 import youtube
@@ -758,6 +758,16 @@ async def ui_index(request: Request) -> Response:
         open(UI_HTML_PATH, encoding="utf-8").read(),
         headers={"Cache-Control": "no-store, must-revalidate"},
     )
+
+
+@mcp.custom_route("/healthz", methods=["GET"])
+async def healthz(request: Request) -> Response:
+    # Docker HEALTHCHECK target. It used to probe GET /mcp, but every such
+    # request makes FastMCP's streamable-HTTP manager create a new session
+    # that nothing ever terminates. Measured 2026-09-29: 2000 probes grew
+    # RSS 73 -> 174 MiB, which is ~145 MiB/day at the 30s interval. This
+    # route takes no locks and does no I/O, so it answers even mid-sync.
+    return PlainTextResponse("ok")
 
 
 @mcp.custom_route("/api/status", methods=["GET"])
