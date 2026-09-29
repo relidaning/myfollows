@@ -1796,9 +1796,13 @@ async function checkLogin() {
   const data = await res.json();
   if (data.logged_in) {
     loginOverlay.classList.remove('show');
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    loadVideos();
-    loadCreators();
+    // init() already loaded the grid/sidebar; only reload when we got here
+    // by polling through a login (pollTimer set), i.e. the session changed.
+    if (pollTimer) {
+      clearInterval(pollTimer); pollTimer = null;
+      loadVideos();
+      loadCreators();
+    }
     return true;
   }
   loginOverlay.classList.add('show');
@@ -1880,6 +1884,11 @@ reloginBtn.addEventListener('click', runRelogin);
 searchBox.addEventListener('input', applySearch);
 
 (async function init() {
+  // loadVideos/loadCreators are plain local-DB reads, but /api/status waits
+  // on the same lock a sync holds for its whole run (60-90s at boot) — don't
+  // gate the first render on it.
+  loadVideos();
+  loadCreators();
   const loggedIn = await checkLogin();
   if (!loggedIn) {
     pollTimer = setInterval(checkLogin, 2500);
