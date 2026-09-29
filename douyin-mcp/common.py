@@ -180,6 +180,11 @@ def _db() -> sqlite3.Connection:
         creator_cols = {row[1] for row in conn.execute("PRAGMA table_info(creators)")}
     if "unlisted" not in creator_cols:
         conn.execute("ALTER TABLE creators ADD COLUMN unlisted INTEGER NOT NULL DEFAULT 0")
+    # /api/creators counts each creator's unwatched videos with a correlated
+    # subquery on (user, platform); without this it's a full videos scan per
+    # creator (~145 ms at 193 creators x 2.5k videos, growing with both).
+    # Leading with `user` also serves the grid's ?user= filter.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_user_platform ON videos(user, platform)")
     conn.commit()
     return conn
 
