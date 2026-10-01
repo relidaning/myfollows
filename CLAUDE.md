@@ -20,6 +20,22 @@ README/code.
   in `server.py`, added 2026-07-30) calls `127.0.0.1:8082` over loopback,
   so a squatter doesn't just break UI requests — it silently swallows the
   scheduled sync too.
+- **Never use `GET /mcp` as a liveness probe.** Each such request makes
+  FastMCP's streamable-HTTP manager open a transport session that is never
+  closed — the old Dockerfile `HEALTHCHECK` did this every 30s (measured
+  2026-09-29: +100 MiB RSS per 2000 probes). It also never failed, because
+  `curl -s` without `-f` accepts `/mcp`'s 406. Use the lock-free
+  `/healthz` route instead. As of 2026-09-29 that fix, plus a log cap in
+  compose, is only in PR #1 (`opt/myfollows-20260929-0308`) and isn't on
+  master yet. Related: `server.py` binds `0.0.0.0` (LAN-reachable, no
+  auth), even though the `docker-compose.yml` comment says it's
+  127.0.0.1/host-local. Still open because the phone PWA may rely on LAN
+  access.
+- **Set `DATA_DIR` before importing `common.py` outside the container.**
+  It defaults to `/data`, so an ad-hoc host-side import/benchmark silently
+  creates a stray empty `/data/videos.db` on the host (happened 2026-09-29).
+  Point it at a scratch copy, e.g. `DATA_DIR=/tmp/mfdata`, or run inside
+  the image with the repo mounted.
 - **YouTube login requires the host's X11 socket mounted in** (see
   `docker-compose.yml`'s `/tmp/.X11-unix` volume + `DISPLAY=:0`) — as of
   2026-07-29 this replaced an in-container Xvfb+VNC virtual display so the
@@ -37,6 +53,25 @@ README/code.
   re-imported session takes effect without a container restart;
   `scripts/import_youtube_cookies.py` calls it automatically after writing
   the file.
+- **Both cached browsers (`_get_context` in `server.py`,
+  `_get_headless_context` in `youtube.py`) live for the whole process and,
+  on master, are never checked for liveness.** If Chromium dies while idle
+  between the daily syncs, every later sync/login/backfill/play-URL refresh
+  raises `TargetClosedError` until the container is restarted, and the
+  scheduled sync only logs it (reproduced 2026-10-02 by SIGKILLing
+  Chromium). The `is_connected()`-then-relaunch fix is only in PR #5
+  (`opt/myfollows-20261002-0331`), not master yet, and doesn't cover the
+  Playwright driver process itself dying.
+- **Don't add Starlette's `GZipMiddleware`** — it would also wrap the
+  `/api/play` video stream and the MCP transport. PR #5 compresses the
+  large list responses per handler instead (`_json_gz` in `server.py`).
+  `/api/videos` is unpaginated (~720 KB for 670 videos) and re-fetched on
+  every page open and filter change.
+- **The login overlay polls with no backoff.** `checkLogin()` in `ui.html`
+  runs every 2.5 s while logged out and calls `startLogin()` whenever no
+  login is in progress, so a failing `/api/login/start` (captcha wall,
+  stale selector) reopens a Douyin page on every poll. Read from the code
+  2026-10-02, not reproduced; still open.
 - **App source isn't bind-mounted — edits to `ui.html`/`server.py`/etc. need
   a rebuild to take effect.** `docker-compose.yml` only mounts `./data`; the
   Dockerfile `COPY`s `server.py common.py youtube.py ui.html` into the image
@@ -64,12 +99,13 @@ README/code.
   `/api/status`) before rendering anything, so opening the page during a
   sync stalled the whole grid for 35s+ even though `loadVideos()`/
   `loadCreators()` are plain local-DB reads with no lock involvement — the
-  fix is decoupling those calls from `checkLogin()` and running status
-  checks concurrently via `Promise.all` instead of sequentially. This exact
-  fix was implemented and verified live on 2026-08-09 but was never
-  committed and was gone from `ui.html` by the very next session — so as of
-  2026-08-09 the current code most likely still has this stall; re-apply if
-  it resurfaces rather than assuming it's already fixed.
+  fix is having `init()` call `loadVideos()`/`loadCreators()` immediately
+  with `checkLogin()` alongside, and having `checkLogin()` only reload them
+  after a successful login poll. A 2026-08-09 version was never committed;
+  the 2026-09-29 fix (20.2s → 0.4s with `/api/status` held 20s) is only in
+  PR #3 (`opt/myfollows-20260929-2050`), not master yet. Don't "fix" it
+  server-side by letting `_login_poll_impl` skip the lock — that races
+  `_login_start_impl` during relogin and can report a stale "logged in".
 - **YouTube's embed iframe only loops a single video with `loop=1&playlist=<id>` together** —
   `loop=1` alone loops the surrounding "up next" queue instead of replaying
   the current video. Used as of 2026-09-18 in `ui.html`'s auto-repeat
