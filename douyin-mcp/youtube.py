@@ -93,6 +93,12 @@ async def _get_pw():
 async def _get_headless_context(fresh: bool):
     global _headless_browser, _headless_context
     pw = await _get_pw()
+    if _headless_browser is not None and not _headless_browser.is_connected():
+        # Same recovery as server.py's _get_context: a Chromium that died
+        # while idle would otherwise fail every call until a restart.
+        _log.warning("Cached YouTube headless browser is gone — relaunching")
+        _headless_browser = None
+        _headless_context = None
     if _headless_browser is None:
         _headless_browser = await pw.chromium.launch(
             headless=True,
