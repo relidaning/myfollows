@@ -1250,6 +1250,30 @@ def _startup_sync_once() -> None:
     _sync_both_platforms("Startup")
 
 
+# Longest single sleep while waiting for SYNC_HOUR — see _sleep_until.
+_SLEEP_CHUNK_SEC = 300.0
+# After waking up past a missed SYNC_HOUR (host was suspended), wait this
+# long before syncing so the network/proxy has a chance to come back.
+_RESUME_GRACE_SEC = 60.0
+
+
+def _sleep_until(target: datetime.datetime) -> None:
+    """Sleep until wall-clock `target`, re-checking the clock every
+    _SLEEP_CHUNK_SEC.
+
+    One long time.sleep() counts monotonic time, which stands still while
+    the host is suspended — and this container runs on a desktop that is
+    suspended most nights. A single sleep-until-6am started the day before
+    therefore fires late by however long the machine was asleep (and the
+    next one drifts again), instead of right after it wakes up.
+    """
+    while True:
+        remaining = (target - datetime.datetime.now()).total_seconds()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, _SLEEP_CHUNK_SEC))
+
+
 def _scheduled_sync_loop() -> None:
     """Hit our own /api/sync and /api/youtube/sync once a day at SYNC_HOUR.
 
@@ -1266,7 +1290,15 @@ def _scheduled_sync_loop() -> None:
         next_run = now.replace(hour=SYNC_HOUR, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += datetime.timedelta(days=1)
-        time.sleep((next_run - now).total_seconds())
+        _sleep_until(next_run)
+
+        late = (datetime.datetime.now() - next_run).total_seconds()
+        if late > _SLEEP_CHUNK_SEC:
+            _log.warning(
+                "Scheduled sync slot %s missed by %.0f min (host suspended?) — running it now",
+                next_run.isoformat(timespec="minutes"), late / 60,
+            )
+            time.sleep(_RESUME_GRACE_SEC)
 
         _log.info("Scheduled sync starting")
         _sync_both_platforms("Scheduled")
