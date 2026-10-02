@@ -67,11 +67,34 @@ README/code.
   large list responses per handler instead (`_json_gz` in `server.py`).
   `/api/videos` is unpaginated (~720 KB for 670 videos) and re-fetched on
   every page open and filter change.
+- **`renderGrid` in `ui.html` builds every matching card at once and every
+  filter change or search rebuilds them all** — on master the search box
+  does it per keystroke. Measured 2026-10-02 (headless Chromium, 4x CPU
+  throttle, phone viewport, 670 cards): 1.8 s of main-thread work on page
+  load, 1.2 s per re-render. PR #6 (`opt/myfollows-20261002-1200`, not on
+  master yet) adds `content-visibility: auto` + `contain-intrinsic-size:
+  auto 330px` on `.card` and a 150 ms search debounce (load 1.8 → 1.1 s,
+  typing a 6-letter query 1.6 → 0.26 s). With that, page height is an
+  estimate until cards have rendered once; retune the `330px` placeholder
+  if the card layout changes or the scrollbar jumps on a real phone.
+- **The host is a desktop that suspends most nights, and on master the
+  daily sync doesn't survive that.** `_scheduled_sync_loop` waits for
+  `SYNC_HOUR` with one long `time.sleep()`, which counts monotonic time —
+  frozen during suspend — so the sync fires late by the length of the
+  suspend (hours after resume, not at resume). PR #6 replaces it with
+  `_sleep_until` (re-checks the wall clock every 5 min, then waits 60 s
+  for the network when a slot was missed); verified 2026-10-02 only
+  against a simulated clock replaying the host's real suspend windows,
+  not a real suspend. Use wall-clock re-checks, not one long sleep, for
+  any new timer here. A failed scheduled sync is still not retried until
+  the next day's slot (open).
 - **The login overlay polls with no backoff.** `checkLogin()` in `ui.html`
   runs every 2.5 s while logged out and calls `startLogin()` whenever no
   login is in progress, so a failing `/api/login/start` (captcha wall,
-  stale selector) reopens a Douyin page on every poll. Read from the code
-  2026-10-02, not reproduced; still open.
+  stale selector) reopens a Douyin page on every poll. Likewise
+  `pollYoutubeLogin` polls `/api/youtube/status` every 2.5 s until login
+  succeeds, so an abandoned login window keeps the tab polling forever.
+  Both read from the code 2026-10-02, not reproduced; still open.
 - **App source isn't bind-mounted — edits to `ui.html`/`server.py`/etc. need
   a rebuild to take effect.** `docker-compose.yml` only mounts `./data`; the
   Dockerfile `COPY`s `server.py common.py youtube.py ui.html` into the image
