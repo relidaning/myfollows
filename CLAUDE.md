@@ -26,10 +26,11 @@ README/code.
   2026-09-29: +100 MiB RSS per 2000 probes). It also never failed, because
   `curl -s` without `-f` accepts `/mcp`'s 406. Use the lock-free
   `/healthz` route instead. As of 2026-09-29 that fix, plus a log cap in
-  compose, is only in PR #1 (`opt/myfollows-20260929-0308`) and isn't on
-  master yet (leak and fix re-verified 2026-10-03; held because the
+  compose, is only on branch `opt/myfollows-20260929-0308` and isn't on
+  master (leak and fix re-verified 2026-10-03; held because the
   `HEALTHCHECK` and log cap can only be proven by a real rebuild +
-  redeploy). Related: `server.py` binds `0.0.0.0` (LAN-reachable, no
+  redeploy; its PR #1 was then closed unmerged the same day, branch
+  kept). Related: `server.py` binds `0.0.0.0` (LAN-reachable, no
   auth), even though the `docker-compose.yml` comment says it's
   127.0.0.1/host-local. Still open because the phone PWA may rely on LAN
   access.
@@ -56,38 +57,48 @@ README/code.
   `scripts/import_youtube_cookies.py` calls it automatically after writing
   the file.
 - **Both cached browsers (`_get_context` in `server.py`,
-  `_get_headless_context` in `youtube.py`) live for the whole process and,
-  on master, are never checked for liveness.** If Chromium dies while idle
-  between the daily syncs, every later sync/login/backfill/play-URL refresh
-  raises `TargetClosedError` until the container is restarted, and the
-  scheduled sync only logs it (reproduced 2026-10-02 by SIGKILLing
-  Chromium). The `is_connected()`-then-relaunch fix is only in PR #5
-  (`opt/myfollows-20261002-0331`), not master yet, and doesn't cover the
-  Playwright driver process itself dying.
+  `_get_headless_context` in `youtube.py`) live for the whole process.**
+  Before PR #5 (merged 2026-10-03, `55f433c`) they were never checked for
+  liveness: if Chromium died while idle between the daily syncs, every
+  later sync/login/backfill/play-URL refresh raised `TargetClosedError`
+  until the container was restarted, and the scheduled sync only logged it
+  (reproduced by SIGKILLing Chromium). Both now check `is_connected()` and
+  relaunch; that doesn't cover the Playwright driver process itself dying.
 - **Don't add Starlette's `GZipMiddleware`** — it would also wrap the
-  `/api/play` video stream and the MCP transport. PR #5 compresses the
-  large list responses per handler instead (`_json_gz` in `server.py`).
-  `/api/videos` is unpaginated (~720 KB for 670 videos) and re-fetched on
-  every page open and filter change.
+  `/api/play` video stream and the MCP transport. The large list responses
+  are compressed per handler instead (`_json_gz` in `server.py`, PR #5,
+  merged 2026-10-03; `/api/videos` 722 → 163 KB on the wire).
+  `/api/videos` is unpaginated (~720 KB raw for 670 videos) and re-fetched
+  on every page open and filter change.
+- **`/api/play` shares one process-wide `httpx.AsyncClient`**
+  (`_get_play_client` in `server.py`, PR #4, merged 2026-10-03) — a
+  `<video>` sends a new Range request per seek, and building a client per
+  request cost ~20 ms and a fresh upstream connection each time (measured
+  23.2 → 3.2 ms, 205 → 1 connections). Don't go back to a per-request
+  client; an unreachable upstream now returns 502 instead of a 500.
 - **`renderGrid` in `ui.html` builds every matching card at once and every
-  filter change or search rebuilds them all** — on master the search box
-  does it per keystroke. Measured 2026-10-02 (headless Chromium, 4x CPU
+  filter change or search rebuilds them all.** Measured 2026-10-02 (headless Chromium, 4x CPU
   throttle, phone viewport, 670 cards): 1.8 s of main-thread work on page
-  load, 1.2 s per re-render. PR #6 (`opt/myfollows-20261002-1200`, not on
-  master yet) adds `content-visibility: auto` + `contain-intrinsic-size:
-  auto 330px` on `.card` and a 150 ms search debounce (load 1.8 → 1.1 s,
-  typing a 6-letter query 1.6 → 0.26 s). With that, page height is an
-  estimate until cards have rendered once; retune the `330px` placeholder
-  if the card layout changes or the scrollbar jumps on a real phone.
-- **The host is a desktop that suspends most nights, and on master the
-  daily sync doesn't survive that.** `_scheduled_sync_loop` waits for
-  `SYNC_HOUR` with one long `time.sleep()`, which counts monotonic time —
-  frozen during suspend — so the sync fires late by the length of the
-  suspend (hours after resume, not at resume). PR #6 replaces it with
-  `_sleep_until` (re-checks the wall clock every 5 min, then waits 60 s
-  for the network when a slot was missed); verified 2026-10-02 only
-  against a simulated clock replaying the host's real suspend windows,
-  not a real suspend. Use wall-clock re-checks, not one long sleep, for
+  load, 1.2 s per re-render, and the search box re-rendered per keystroke.
+  PR #6 (merged 2026-10-03, `3212c09`) added `content-visibility: auto` +
+  `contain-intrinsic-size: auto 330px` on `.card` and a 150 ms search
+  debounce (load 1.8 → 1.0 s, typing a 6-letter query 1.1 → 0.22 s, one
+  render instead of six). With that, page height is an estimate until
+  cards have rendered once (114,919 vs 120,865 px for 670 cards; no
+  backward jumps in a headless wheel-scroll test); retune the `330px`
+  placeholder if the card layout changes or the scrollbar jumps on a real
+  phone, which is still untested.
+- **The host is a desktop that suspends most nights, so timers must
+  survive that.** `_scheduled_sync_loop` used to wait for `SYNC_HOUR` with
+  one long `time.sleep()`, which counts monotonic time — frozen during
+  suspend — so the sync fired late by the length of the suspend (hours
+  after resume, not at resume). PR #6 (merged 2026-10-03, `3212c09`)
+  replaced it with `_sleep_until` (re-checks the wall clock every 5 min,
+  then waits 60 s for the network when a slot was missed); verified
+  2026-10-02 and 2026-10-03 only against a simulated clock replaying the
+  host's real suspend windows, not a real suspend — after a night slept
+  through `SYNC_HOUR`, the log should show "Scheduled sync slot … missed
+  by … min" about a minute after resume. Use wall-clock re-checks, not one long sleep, for
   any new timer here. A failed scheduled sync is still not retried until
   the next day's slot (open).
 - **The login overlay polls with no backoff.** `checkLogin()` in `ui.html`

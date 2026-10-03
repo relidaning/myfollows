@@ -1,5 +1,8 @@
 # Sessions
 
+## 2026-10-03 — Review of optimize PRs #4–#6: all three merged (unattended review run)
+Each claim reproduced in no-network scratch containers with a copy of the live DB, each PR tested on top of the ones merged just before it: #4 `/api/play` 23.2 → 3.2 ms per Range request and 205 → 1 upstream connections (`789af65`); #5 both cached browsers relaunch after a SIGKILLed Chromium and `/api/videos` shrinks 721,798 → 163,294 bytes with byte-identical decompressed bodies (`55f433c`); #6 missed sync slots run ~2 min after resume in the simulated-clock replay and page-load main-thread work drops 1,751 → 1,045 ms with no scroll jumps (`3212c09`). None of #3–#6 is live until a rebuild + redeploy (the container has been stopped since ~09-25); a real suspend and a real phone are still untested, and PR #1 was closed unmerged by someone else during the run (branch kept), so the `/healthz` fix is still not on master.
+
 ## 2026-10-03 — Review of optimize PRs #1–#3: #3 merged, #1 and #2 held (unattended review run)
 All three claims reproduced in no-network scratch containers on master `3d90d3e` + each PR: #1 `GET /mcp` probes leak (72 → 173 MiB RSS per 2000) vs flat with `/healthz`; #2 `/api/creators` 161.6 → 6.3 ms with byte-identical responses; #3 grid render 20.2 → 0.24–0.43 s with `/api/status` held 20 s, plus the previously untested login-overlay path (grid/sidebar reload exactly once after login). Only #3 (`ui.html` only) was squash-merged as `53385ca` and still needs a rebuild + redeploy; #1 is held because its Dockerfile `HEALTHCHECK` and compose log cap can only be proven by a real redeploy, #2 because it adds an index to the live `videos.db`, which is the user's call (undo: `DROP INDEX idx_videos_user_platform`).
 
