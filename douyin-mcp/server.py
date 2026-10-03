@@ -19,6 +19,8 @@ tab and update the relevant constant or `_parse_feed_response` below.
 
 import asyncio
 import datetime
+import gzip
+import json
 import logging
 import os
 import threading
@@ -96,10 +98,19 @@ async def _get_context(fresh: bool):
     (used to kick off a new login). fresh=False reuses the persisted
     storage_state (cookies) from a prior successful login.
     """
-    global _playwright, _browser, _context
+    global _playwright, _browser, _context, _login_page
 
     if _playwright is None:
         _playwright = await async_playwright().start()
+    if _browser is not None and not _browser.is_connected():
+        # The cached Chromium died (crash / OOM kill) while idle between
+        # syncs. Its context and pages are dead with it and every call on
+        # them raises TargetClosedError forever, so drop them and relaunch
+        # instead of failing every sync until the container is restarted.
+        _log.warning("Cached Douyin browser is gone — relaunching")
+        _browser = None
+        _context = None
+        _login_page = None
     if _browser is None:
         # --disable-blink-features=AutomationControlled trims the most
         # obvious automation fingerprint. This does NOT fix Douyin serving
@@ -823,6 +834,24 @@ async def api_youtube_sync(request: Request) -> Response:
     return JSONResponse(await youtube.sync(limit))
 
 
+# Below this size gzip's saving isn't worth the CPU.
+_GZIP_MIN_BYTES = 1024
+
+
+def _json_gz(request: Request, data: dict) -> Response:
+    """JSONResponse, gzipped when the client accepts it. The video list is
+    unpaginated (~720 KB for 670 videos, measured 2026-10-02) and the UI
+    re-fetches it on every page open and filter change. Done per-handler
+    rather than with Starlette's GZipMiddleware so the /api/play video
+    stream and the MCP transport are left untouched."""
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    headers = {"Vary": "Accept-Encoding"}
+    if len(body) >= _GZIP_MIN_BYTES and "gzip" in request.headers.get("accept-encoding", "").lower():
+        body = gzip.compress(body, compresslevel=6)
+        headers["Content-Encoding"] = "gzip"
+    return Response(body, media_type="application/json", headers=headers)
+
+
 @mcp.custom_route("/api/videos", methods=["GET"])
 async def api_videos(request: Request) -> Response:
     watched_param = request.query_params.get("watched")
@@ -899,7 +928,7 @@ async def api_videos(request: Request) -> Response:
         if label not in LABEL_CATEGORIES
     })
     label_categories = list(LABEL_CATEGORIES.keys()) + custom_labels
-    return JSONResponse({"videos": videos, "users": users, "label_categories": label_categories})
+    return _json_gz(request, {"videos": videos, "users": users, "label_categories": label_categories})
 
 
 @mcp.custom_route("/api/videos/recommended", methods=["GET"])
@@ -958,7 +987,7 @@ async def api_recommended(request: Request) -> Response:
         v["recommend_score"] = round(rec_score, 2)
 
     videos.sort(key=lambda v: (v["recommend_score"], v["published_at"] or ""), reverse=True)
-    return JSONResponse({"videos": videos[:limit]})
+    return _json_gz(request, {"videos": videos[:limit]})
 
 
 @mcp.custom_route("/api/videos/{video_id}/watched", methods=["POST"])
@@ -1146,7 +1175,7 @@ async def api_creators(request: Request) -> Response:
         }
         for r in rows
     ]
-    return JSONResponse({"creators": creators})
+    return _json_gz(request, {"creators": creators})
 
 
 # One shared client for the play proxy instead of one per request: a <video>
