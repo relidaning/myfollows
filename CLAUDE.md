@@ -27,7 +27,9 @@ README/code.
   `curl -s` without `-f` accepts `/mcp`'s 406. Use the lock-free
   `/healthz` route instead. As of 2026-09-29 that fix, plus a log cap in
   compose, is only in PR #1 (`opt/myfollows-20260929-0308`) and isn't on
-  master yet. Related: `server.py` binds `0.0.0.0` (LAN-reachable, no
+  master yet (leak and fix re-verified 2026-10-03; held because the
+  `HEALTHCHECK` and log cap can only be proven by a real rebuild +
+  redeploy). Related: `server.py` binds `0.0.0.0` (LAN-reachable, no
   auth), even though the `docker-compose.yml` comment says it's
   127.0.0.1/host-local. Still open because the phone PWA may rely on LAN
   access.
@@ -125,8 +127,10 @@ README/code.
   fix is having `init()` call `loadVideos()`/`loadCreators()` immediately
   with `checkLogin()` alongside, and having `checkLogin()` only reload them
   after a successful login poll. A 2026-08-09 version was never committed;
-  the 2026-09-29 fix (20.2s → 0.4s with `/api/status` held 20s) is only in
-  PR #3 (`opt/myfollows-20260929-2050`), not master yet. Don't "fix" it
+  the 2026-09-29 fix (20.2s → 0.4s with `/api/status` held 20s) was
+  re-verified and merged to master 2026-10-03 (PR #3, `53385ca`). A side
+  effect: while logged out, the grid from the local DB is already rendered
+  behind the login overlay. Don't "fix" it
   server-side by letting `_login_poll_impl` skip the lock — that races
   `_login_start_impl` during relogin and can report a stale "logged in".
 - **YouTube's embed iframe only loops a single video with `loop=1&playlist=<id>` together** —
