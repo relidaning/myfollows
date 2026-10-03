@@ -1149,6 +1149,21 @@ async def api_creators(request: Request) -> Response:
     return JSONResponse({"creators": creators})
 
 
+# One shared client for the play proxy instead of one per request: a <video>
+# element fires a fresh Range request on every seek, and building an
+# AsyncClient each time (SSL context + empty pool) cost ~20 ms of CPU and a
+# new TCP/TLS handshake to the CDN per request. Created lazily so it binds to
+# the server's own event loop.
+_play_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_play_client() -> httpx.AsyncClient:
+    global _play_client
+    if _play_client is None:
+        _play_client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
+    return _play_client
+
+
 @mcp.custom_route("/api/play/{video_id}", methods=["GET"])
 async def api_play(request: Request) -> Response:
     """Proxy a video's play_url with the Referer header its CDN requires.
@@ -1177,10 +1192,14 @@ async def api_play(request: Request) -> Response:
     if range_header:
         headers["Range"] = range_header
 
-    client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
-    upstream = await client.send(
-        client.build_request("GET", play_url, headers=headers), stream=True
-    )
+    client = _get_play_client()
+    try:
+        upstream = await client.send(
+            client.build_request("GET", play_url, headers=headers), stream=True
+        )
+    except httpx.HTTPError as e:
+        _log.warning("play proxy upstream error for %s: %r", video_id, e)
+        return JSONResponse({"error": "upstream fetch failed"}, status_code=502)
 
     async def body():
         try:
@@ -1188,7 +1207,6 @@ async def api_play(request: Request) -> Response:
                 yield chunk
         finally:
             await upstream.aclose()
-            await client.aclose()
 
     passthrough_headers = {}
     for h in ("content-type", "content-length", "content-range", "accept-ranges"):
