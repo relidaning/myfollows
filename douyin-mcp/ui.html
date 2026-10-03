@@ -177,6 +177,12 @@
     overflow: hidden;
     display: flex; flex-direction: column;
     transition: border-color 0.15s ease, transform 0.2s ease, opacity 0.2s ease;
+    /* The grid renders every matching video at once (unpaginated, 670+) —
+       let the browser skip layout/paint for cards that are off-screen.
+       The intrinsic size is only a placeholder until a card has been
+       rendered once ("auto" then remembers its real size). */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 330px;
   }
   .card:hover { border-color: #3a3a42; transform: translateY(-2px); }
   .card.removing { opacity: 0; transform: scale(0.94); pointer-events: none; }
@@ -1881,7 +1887,13 @@ recommendedBtn.addEventListener('click', () => { setRecommendedMode(!recommended
 syncBtn.addEventListener('click', runSync);
 backfillBtn.addEventListener('click', runBackfill);
 reloginBtn.addEventListener('click', runRelogin);
-searchBox.addEventListener('input', applySearch);
+// Debounced — applySearch rebuilds the whole grid and creator list, so
+// running it on every keystroke stalls typing on a phone.
+let searchTimer = null;
+searchBox.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(applySearch, 150);
+});
 
 (async function init() {
   // loadVideos/loadCreators are plain local-DB reads, but /api/status waits
