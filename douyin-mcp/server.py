@@ -1251,19 +1251,63 @@ async def api_play(request: Request) -> Response:
 _BASE_URL = "http://127.0.0.1:8082"
 
 
+# Waits before re-trying a platform whose sync request failed outright.
+# Container logs 2026-09-18..24: all 5 failed syncs were transport-level
+# (Page.goto ERR_NETWORK_CHANGED / 30s timeout right after boot or a network
+# change) and the next attempt was the following day's SYNC_HOUR.
+_SYNC_RETRY_DELAYS_SEC = (120.0, 600.0)
+
+
+def _sync_platform(client: httpx.Client, label_prefix: str, label: str, path: str) -> bool:
+    """POST one sync endpoint and log the outcome. Returns False only when
+    the request itself failed (exception or 5xx) and is worth re-trying.
+
+    A 200 carrying {"error": ...} (logged out, captcha wall, changed feed
+    shape) counts as done — the site answered, and asking again won't help
+    and only adds to Douyin's risk-control score."""
+    try:
+        resp = client.post(f"{_BASE_URL}{path}")
+    except Exception as e:
+        _log.warning("%s %s sync request failed: %r", label_prefix, label, e)
+        return False
+    if resp.status_code >= 500:
+        # The handler raised; its traceback is already in the server log.
+        _log.warning("%s %s sync failed: HTTP %s", label_prefix, label, resp.status_code)
+        return False
+    try:
+        _log.info("%s %s sync result: %s", label_prefix, label, resp.json())
+    except ValueError:
+        _log.warning("%s %s sync: HTTP %s, non-JSON body", label_prefix, label, resp.status_code)
+    return True
+
+
 def _sync_both_platforms(label_prefix: str) -> None:
     """POST /api/sync then /api/youtube/sync over loopback, logging results.
 
     Shared by the startup sync and the daily scheduled sync so both get the
     same locking and not-logged-in handling the REST endpoints already have.
+    A platform whose request failed is re-tried after each of
+    _SYNC_RETRY_DELAYS_SEC, then left for the next slot.
     """
-    with httpx.Client(timeout=300.0) as client:
-        for label, path in (("Douyin", "/api/sync"), ("YouTube", "/api/youtube/sync")):
-            try:
-                resp = client.post(f"{_BASE_URL}{path}")
-                _log.info("%s %s sync result: %s", label_prefix, label, resp.json())
-            except Exception:
-                _log.exception("%s %s sync failed", label_prefix, label)
+    pending = [("Douyin", "/api/sync"), ("YouTube", "/api/youtube/sync")]
+    for delay in (0.0, *_SYNC_RETRY_DELAYS_SEC):
+        if delay:
+            _log.info(
+                "%s sync: retrying %s in %.0f s",
+                label_prefix, ", ".join(label for label, _ in pending), delay,
+            )
+            _sleep_until(datetime.datetime.now() + datetime.timedelta(seconds=delay))
+        with httpx.Client(timeout=300.0) as client:
+            pending = [
+                (label, path) for label, path in pending
+                if not _sync_platform(client, label_prefix, label, path)
+            ]
+        if not pending:
+            return
+    _log.error(
+        "%s sync: giving up on %s until the next slot",
+        label_prefix, ", ".join(label for label, _ in pending),
+    )
 
 
 def _wait_for_server(timeout: float = 60.0) -> bool:
