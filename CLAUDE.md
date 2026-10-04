@@ -100,7 +100,12 @@ README/code.
   through `SYNC_HOUR`, the log should show "Scheduled sync slot … missed
   by … min" about a minute after resume. Use wall-clock re-checks, not one long sleep, for
   any new timer here. A failed scheduled sync is still not retried until
-  the next day's slot (open).
+  the next day's slot on master. PR #7 (`opt/myfollows-20261005-0506`)
+  retries only a platform whose request raised or returned 5xx, after 2
+  and 10 min, never a 200 carrying `{"error": ...}` (logged out, captcha);
+  it was verified against a fake local server 2026-10-05 but is held: the
+  owner has to decide whether those extra Douyin page loads are acceptable
+  given its risk control.
 - **The login overlay polls with no backoff.** `checkLogin()` in `ui.html`
   runs every 2.5 s while logged out and calls `startLogin()` whenever no
   login is in progress, so a failing `/api/login/start` (captcha wall,
