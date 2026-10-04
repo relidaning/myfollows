@@ -99,8 +99,14 @@ README/code.
   host's real suspend windows, not a real suspend — after a night slept
   through `SYNC_HOUR`, the log should show "Scheduled sync slot … missed
   by … min" about a minute after resume. Use wall-clock re-checks, not one long sleep, for
-  any new timer here. A failed scheduled sync is still not retried until
-  the next day's slot (open).
+  any new timer here. Until branch `opt/myfollows-20261005-0506` a failed
+  sync was not retried until the next day's slot — container logs
+  2026-09-18..24 show 5 failed syncs, all transport-level (`Page.goto`
+  `ERR_NETWORK_CHANGED` / 30 s timeout within seconds of boot). That
+  branch makes `_sync_both_platforms` retry a platform after 2 and 10 min,
+  but only when the request raised or returned 5xx — a 200 with
+  `{"error": ...}` (logged out, captcha) is deliberately not retried.
+  Tested 2026-10-05 only with a stubbed HTTP client, not a real outage.
 - **The login overlay polls with no backoff.** `checkLogin()` in `ui.html`
   runs every 2.5 s while logged out and calls `startLogin()` whenever no
   login is in progress, so a failing `/api/login/start` (captcha wall,
