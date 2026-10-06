@@ -83,7 +83,16 @@ README/code.
   (`opt/myfollows-20261007-0419`, open, not on master) closes each browser
   and its driver after `BROWSER_IDLE_CLOSE_SEC` (default 600, `0` = never)
   without use: 471 → 76 MiB, first use after a close ~370 ms instead of
-  ~30 ms; not tested against a real sync. Not covered by it: the headed
+  ~30 ms; not tested against a real sync. Reproduced by a review
+  2026-10-07 (466 → 75 MiB) but held for two side effects: every idle
+  close throws away cookies the site refreshed in the live context and
+  the relaunch reloads the on-disk value (the storage-state files are
+  written only at login), so that would happen ~10 min after each use
+  instead of at a container restart, with an unknown effect on real
+  logouts; and each close leaves 4 zombie `chrome-headless` processes,
+  because Python is PID 1 in the container and doesn't reap them (none
+  with `docker run --init`, so compose needs `init: true` before anything
+  closes browsers at runtime). Not covered by it: the headed
   YouTube login browser is never closed after a login (`login_poll`/
   `login_wait` in `youtube.py` close only its context; read from the code,
   not reproduced).
