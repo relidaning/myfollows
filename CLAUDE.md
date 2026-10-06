@@ -64,6 +64,17 @@ README/code.
   until the container was restarted, and the scheduled sync only logged it
   (reproduced by SIGKILLing Chromium). Both now check `is_connected()` and
   relaunch; that doesn't cover the Playwright driver process itself dying.
+  On branch `opt/myfollows-20261007-0419` (not on master as of 2026-10-07)
+  they no longer live that long: each is closed, with its Playwright
+  driver, after `BROWSER_IDLE_CLOSE_SEC` (default 600, `0` = never) without
+  use and relaunched on demand. Measured 2026-10-07 in the image with no
+  network and blank pages only: idle PSS 471 → 76 MiB (the two node
+  drivers were 230 MiB of that, the Chromiums 165 MiB), first use after a
+  close ~370 ms instead of ~30 ms. Every relaunch re-reads the
+  `storage_state` files from disk, like a container restart does. An open
+  Douyin QR login page blocks the close; the headed YouTube login browser
+  is not covered and, once opened, is never closed (only its context is),
+  which also keeps YouTube's driver alive until a restart.
 - **Don't add Starlette's `GZipMiddleware`** — it would also wrap the
   `/api/play` video stream and the MCP transport. The large list responses
   are compressed per handler instead (`_json_gz` in `server.py`, PR #5,

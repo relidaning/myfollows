@@ -16,6 +16,10 @@ DOUYIN_STORAGE_STATE_PATH = os.path.join(DATA_DIR, "storage_state.json")
 YOUTUBE_STORAGE_STATE_PATH = os.path.join(DATA_DIR, "youtube_storage_state.json")
 QR_IMAGE_PATH = os.path.join(DATA_DIR, "qrcode.png")
 
+# Seconds a cached headless Chromium may sit unused before it is closed (see
+# server.py's _close_idle_browser); 0 disables.
+BROWSER_IDLE_CLOSE_SEC = int(os.getenv("BROWSER_IDLE_CLOSE_SEC", "600"))
+
 os.makedirs(DATA_DIR, exist_ok=True)
 
 _VIDEO_COLUMNS = [

@@ -32,6 +32,7 @@ import datetime
 import logging
 import os
 import re
+import time
 from typing import Optional
 
 from playwright.async_api import Page, async_playwright
@@ -90,8 +91,50 @@ async def _get_pw():
     return _pw
 
 
+# Idle close of the headless browser — see BROWSER_IDLE_CLOSE_SEC in
+# server.py, this is the same thing for YouTube. The headed login browser is
+# not covered: it only exists while a login window is open.
+_IDLE_CHECK_SEC = 30
+_headless_last_used = 0.0
+_headless_idle_task: Optional[asyncio.Task] = None
+
+
+async def _close_idle_headless_browser() -> None:
+    global _pw, _headless_browser, _headless_context, _headless_last_used, _headless_idle_task
+    while True:
+        await asyncio.sleep(_IDLE_CHECK_SEC)
+        if _headless_lock.locked():
+            _headless_last_used = time.time()
+            continue
+        if time.time() - _headless_last_used < common.BROWSER_IDLE_CLOSE_SEC:
+            continue
+        async with _headless_lock:
+            browser, _headless_browser, _headless_context = _headless_browser, None, None
+            _headless_idle_task = None
+            # The driver is shared with the headed login browser: stop it
+            # only when no login window is open or being opened.
+            pw = None
+            if _headed_browser is None and not _headed_lock.locked():
+                pw, _pw = _pw, None
+            try:
+                if browser is not None:
+                    await browser.close()
+            except Exception:
+                _log.exception("Closing idle YouTube headless browser failed")
+            try:
+                if pw is not None:
+                    await pw.stop()
+            except Exception:
+                _log.exception("Stopping idle Playwright driver failed")
+            _log.info("Closed idle YouTube headless browser")
+        return
+
+
 async def _get_headless_context(fresh: bool):
-    global _headless_browser, _headless_context
+    global _headless_browser, _headless_context, _headless_last_used, _headless_idle_task
+    _headless_last_used = time.time()
+    if common.BROWSER_IDLE_CLOSE_SEC > 0 and _headless_idle_task is None:
+        _headless_idle_task = asyncio.create_task(_close_idle_headless_browser())
     pw = await _get_pw()
     if _headless_browser is not None and not _headless_browser.is_connected():
         # Same recovery as server.py's _get_context: a Chromium that died
