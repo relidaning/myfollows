@@ -76,6 +76,17 @@ README/code.
   request cost ~20 ms and a fresh upstream connection each time (measured
   23.2 → 3.2 ms, 205 → 1 connections). Don't go back to a per-request
   client; an unreachable upstream now returns 502 instead of a 500.
+- **The idle browsers are the app's largest standing memory cost.**
+  Measured 2026-10-07 (existing image, no network, blank pages, so a lower
+  bound): 471 MiB PSS idle after one use each, of which the two Playwright
+  node drivers are 230 MiB, the Chromiums 165 MiB and Python 76 MiB. PR #8
+  (`opt/myfollows-20261007-0419`, open, not on master) closes each browser
+  and its driver after `BROWSER_IDLE_CLOSE_SEC` (default 600, `0` = never)
+  without use: 471 → 76 MiB, first use after a close ~370 ms instead of
+  ~30 ms; not tested against a real sync. Not covered by it: the headed
+  YouTube login browser is never closed after a login (`login_poll`/
+  `login_wait` in `youtube.py` close only its context; read from the code,
+  not reproduced).
 - **`renderGrid` in `ui.html` builds every matching card at once and every
   filter change or search rebuilds them all.** Measured 2026-10-02 (headless Chromium, 4x CPU
   throttle, phone viewport, 670 cards): 1.8 s of main-thread work on page
