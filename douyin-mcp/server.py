@@ -90,6 +90,52 @@ _browser = None
 _context = None
 _login_page: Optional[Page] = None
 
+# The app uses the browser for a daily sync plus the odd UI action (login
+# check, play-URL refresh, unfollow), so a Chromium kept open for the whole
+# process sits idle ~24 h a day holding its memory. Close it after this many
+# seconds without use; _get_context relaunches it on demand. 0 keeps it open
+# forever (the old behavior).
+BROWSER_IDLE_CLOSE_SEC = common.BROWSER_IDLE_CLOSE_SEC
+_IDLE_CHECK_SEC = 30
+_last_used = 0.0
+_idle_task: Optional[asyncio.Task] = None
+
+
+async def _close_idle_browser() -> None:
+    """Background task started by _get_context: closes the cached Chromium
+    and its Playwright driver once they have gone BROWSER_IDLE_CLOSE_SEC
+    unused, then exits. Compares wall-clock time, so after a host suspend it
+    closes on the first check."""
+    global _playwright, _browser, _context, _last_used, _idle_task
+    while True:
+        await asyncio.sleep(_IDLE_CHECK_SEC)
+        if _lock.locked():
+            _last_used = time.time()
+            continue
+        # An open QR login page is waiting for a scan — closing the browser
+        # would throw away the code the user is looking at.
+        if _login_page is not None:
+            continue
+        if time.time() - _last_used < BROWSER_IDLE_CLOSE_SEC:
+            continue
+        async with _lock:
+            browser, _browser, _context, _idle_task = _browser, None, None, None
+            # The Playwright driver (a node process) is as large as the
+            # browser itself, so it goes too; _get_context restarts both.
+            pw, _playwright = _playwright, None
+            try:
+                if browser is not None:
+                    await browser.close()
+            except Exception:
+                _log.exception("Closing idle Douyin browser failed")
+            try:
+                if pw is not None:
+                    await pw.stop()
+            except Exception:
+                _log.exception("Stopping idle Playwright driver failed")
+            _log.info("Closed idle Douyin browser")
+        return
+
 
 async def _get_context(fresh: bool):
     """Return the shared browser context, (re)creating it if needed.
@@ -98,8 +144,11 @@ async def _get_context(fresh: bool):
     (used to kick off a new login). fresh=False reuses the persisted
     storage_state (cookies) from a prior successful login.
     """
-    global _playwright, _browser, _context, _login_page
+    global _playwright, _browser, _context, _login_page, _last_used, _idle_task
 
+    _last_used = time.time()
+    if BROWSER_IDLE_CLOSE_SEC > 0 and _idle_task is None:
+        _idle_task = asyncio.create_task(_close_idle_browser())
     if _playwright is None:
         _playwright = await async_playwright().start()
     if _browser is not None and not _browser.is_connected():
