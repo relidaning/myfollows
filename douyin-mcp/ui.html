@@ -282,7 +282,7 @@
     overflow: hidden; border: 1px solid var(--line);
   }
   #qrWrap img { width: 100%; height: 100%; object-fit: contain; }
-  #qrWrap .placeholder { color: #999; font-size: 12px; }
+  #qrWrap .placeholder { color: #999; font-size: 12px; padding: 8px; max-height: 100%; overflow-y: auto; }
   .spinner-dot {
     width: 6px; height: 6px; border-radius: 50%; background: var(--cyan);
     display: inline-block; animation: pulse 1.2s ease-in-out infinite;
@@ -655,6 +655,7 @@
   <h1>Log in to Douyin</h1>
   <p>Open the Douyin app → tap ≡ in the top-left → "扫一扫" and scan this code.</p>
   <div id="qrWrap"><span class="placeholder">Loading QR…</span></div>
+  <button id="loginRetryBtn" hidden>Retry now</button>
   <p><span class="spinner-dot"></span> Waiting for scan…</p>
 </div>
 
@@ -738,6 +739,7 @@ const backfillBtn = document.getElementById('backfillBtn');
 const syncStatus = document.getElementById('syncStatus');
 const loginOverlay = document.getElementById('loginOverlay');
 const qrWrap = document.getElementById('qrWrap');
+const loginRetryBtn = document.getElementById('loginRetryBtn');
 const busyOverlay = document.getElementById('busyOverlay');
 const busyText = document.getElementById('busyText');
 const platformFilter = document.getElementById('platformFilter');
@@ -1795,7 +1797,33 @@ async function runBackfill() {
   backfillBtn.disabled = false;
 }
 
+// Login polling. Each poll is scheduled only after the previous one has
+// answered (/api/status waits on the server's sync/login lock, so a fixed
+// setInterval stacked requests behind it), and nothing polls while the tab
+// is hidden — it resumes with an immediate poll when the tab is shown again.
+const LOGIN_POLL_MS = 2500;
+// A failed /api/login/start (captcha wall, stale selector) costs a full
+// Douyin page load in a fresh context, and repeating it back-to-back only
+// feeds Douyin's risk control — so automatic retries back off, doubling
+// from 15 s up to 10 min. "Retry now" skips the wait.
+const LOGIN_RETRY_MIN_MS = 15000;
+const LOGIN_RETRY_MAX_MS = 600000;
 let pollTimer = null;
+let loginPolling = false;
+let loginStarting = false;
+let loginRetryMs = 0;
+let loginRetryAt = 0;
+
+function scheduleLoginPoll(delay = LOGIN_POLL_MS) {
+  clearTimeout(pollTimer);
+  pollTimer = null;
+  if (!loginPolling || document.hidden) return;
+  pollTimer = setTimeout(async () => {
+    pollTimer = null;
+    try { await checkLogin(); } catch (e) { /* server unreachable — keep polling */ }
+    scheduleLoginPoll();
+  }, delay);
+}
 
 async function checkLogin() {
   const res = await fetch('/api/status');
@@ -1803,9 +1831,9 @@ async function checkLogin() {
   if (data.logged_in) {
     loginOverlay.classList.remove('show');
     // init() already loaded the grid/sidebar; only reload when we got here
-    // by polling through a login (pollTimer set), i.e. the session changed.
-    if (pollTimer) {
-      clearInterval(pollTimer); pollTimer = null;
+    // by polling through a login (loginPolling set), i.e. the session changed.
+    if (loginPolling) {
+      loginPolling = false;
       loadVideos();
       loadCreators();
     }
@@ -1813,36 +1841,78 @@ async function checkLogin() {
   }
   loginOverlay.classList.add('show');
   if (data.in_progress) {
+    loginRetryBtn.hidden = true;
     qrWrap.innerHTML = `<img src="/api/login/qr.png?ts=${Date.now()}" alt="QR code">`;
-  } else {
-    startLogin();
+  } else if (Date.now() >= loginRetryAt) {
+    await startLogin();
   }
   return false;
 }
 
 async function startLogin() {
+  if (loginStarting) return;
+  loginStarting = true;
+  loginRetryBtn.hidden = true;
   qrWrap.innerHTML = '<span class="placeholder">Loading QR…</span>';
-  const res = await fetch('/api/login/start', { method: 'POST' });
-  const data = await res.json();
-  if (data.status === 'qr_ready') {
-    qrWrap.innerHTML = `<img src="/api/login/qr.png?ts=${Date.now()}" alt="QR code">`;
-  } else if (data.error || data.message) {
-    qrWrap.innerHTML = `<span class="placeholder">${escapeHtml(data.message || data.error)}</span>`;
+  let data;
+  try {
+    const res = await fetch('/api/login/start', { method: 'POST' });
+    data = await res.json();
+  } catch (e) {
+    data = { error: 'Could not reach the server to start the Douyin login' };
   }
+  loginStarting = false;
+  if (data.status === 'qr_ready') {
+    loginRetryMs = 0;
+    loginRetryAt = 0;
+    qrWrap.innerHTML = `<img src="/api/login/qr.png?ts=${Date.now()}" alt="QR code">`;
+    return;
+  }
+  loginRetryMs = Math.min(loginRetryMs ? loginRetryMs * 2 : LOGIN_RETRY_MIN_MS, LOGIN_RETRY_MAX_MS);
+  loginRetryAt = Date.now() + loginRetryMs;
+  const wait = loginRetryMs < 60000 ? `${loginRetryMs / 1000} s` : `${Math.round(loginRetryMs / 60000)} min`;
+  const msg = data.message || data.error || 'Could not start the Douyin login';
+  qrWrap.innerHTML = `<span class="placeholder">${escapeHtml(msg)}</span>`;
+  loginRetryBtn.textContent = `Retry now (automatic retry in ${wait})`;
+  loginRetryBtn.hidden = false;
 }
 
+// An abandoned YouTube login window never reports success, so stop asking
+// after 10 minutes instead of polling for as long as the tab stays open.
+const YT_LOGIN_POLL_MAX_MS = 600000;
 let ytPollTimer = null;
+let ytPolling = false;
+let ytPollDeadline = 0;
 
 function stopYoutubeLoginPoll() {
-  if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
+  ytPolling = false;
+  clearTimeout(ytPollTimer);
+  ytPollTimer = null;
+}
+
+function scheduleYoutubeLoginPoll(delay = LOGIN_POLL_MS) {
+  clearTimeout(ytPollTimer);
+  ytPollTimer = null;
+  if (!ytPolling || document.hidden) return;
+  ytPollTimer = setTimeout(async () => {
+    ytPollTimer = null;
+    try { await pollYoutubeLogin(); } catch (e) { /* server unreachable — keep polling */ }
+    scheduleYoutubeLoginPoll();
+  }, delay);
 }
 
 async function pollYoutubeLogin() {
+  // Read the deadline before the request: the one poll a re-shown tab makes
+  // after a long time hidden must still be able to report success.
+  const expired = Date.now() >= ytPollDeadline;
   const res = await fetch('/api/youtube/status');
   const data = await res.json();
   if (data.logged_in) {
     stopYoutubeLoginPoll();
     syncStatus.textContent = 'Logged in to YouTube';
+  } else if (expired && ytPolling) {
+    stopYoutubeLoginPoll();
+    syncStatus.textContent = 'Stopped waiting for the YouTube login — click Re-login to try again.';
   }
 }
 
@@ -1852,8 +1922,9 @@ async function startYoutubeLogin() {
     const data = await res.json();
     if (data.status === 'window_opened') {
       syncStatus.textContent = 'A Chromium window just opened on your desktop — sign in there, this updates automatically once you\'re done.';
-      stopYoutubeLoginPoll();
-      ytPollTimer = setInterval(pollYoutubeLogin, 2500);
+      ytPolling = true;
+      ytPollDeadline = Date.now() + YT_LOGIN_POLL_MAX_MS;
+      scheduleYoutubeLoginPoll();
     } else {
       syncStatus.textContent = data.error || data.message || 'Could not start YouTube login';
     }
@@ -1862,6 +1933,11 @@ async function startYoutubeLogin() {
   }
 }
 
+document.addEventListener('visibilitychange', () => {
+  scheduleLoginPoll(0);
+  scheduleYoutubeLoginPoll(0);
+});
+
 // One button drives both platforms' login flows at once: Douyin's QR
 // overlay (always the automatic behavior when logged out — see
 // checkLogin/startLogin) and YouTube's headed-Chromium popup, so the user
@@ -1869,8 +1945,8 @@ async function startYoutubeLogin() {
 async function runRelogin() {
   reloginBtn.disabled = true;
   loginOverlay.classList.add('show');
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(checkLogin, 2500);
+  loginPolling = true;
+  scheduleLoginPoll();
   startLogin();
   await startYoutubeLogin();
   reloginBtn.disabled = false;
@@ -1887,6 +1963,7 @@ recommendedBtn.addEventListener('click', () => { setRecommendedMode(!recommended
 syncBtn.addEventListener('click', runSync);
 backfillBtn.addEventListener('click', runBackfill);
 reloginBtn.addEventListener('click', runRelogin);
+loginRetryBtn.addEventListener('click', startLogin);
 // Debounced — applySearch rebuilds the whole grid and creator list, so
 // running it on every keystroke stalls typing on a phone.
 let searchTimer = null;
@@ -1903,7 +1980,8 @@ searchBox.addEventListener('input', () => {
   loadCreators();
   const loggedIn = await checkLogin();
   if (!loggedIn) {
-    pollTimer = setInterval(checkLogin, 2500);
+    loginPolling = true;
+    scheduleLoginPoll();
   }
 })();
 </script>
