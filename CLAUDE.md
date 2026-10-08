@@ -126,23 +126,23 @@ README/code.
   it was verified against a fake local server 2026-10-05 but is held: the
   owner has to decide whether those extra Douyin page loads are acceptable
   given its risk control.
-- **The login overlay polls with no backoff.** `checkLogin()` in `ui.html`
-  runs every 2.5 s while logged out and calls `startLogin()` whenever no
-  login is in progress, so a failing `/api/login/start` (captcha wall,
-  stale selector) reopens a Douyin page on every poll. Likewise
-  `pollYoutubeLogin` polls `/api/youtube/status` every 2.5 s until login
-  succeeds, so an abandoned login window keeps the tab polling forever.
-  Reproduced 2026-10-08 against a stub server (headless Chromium): 41
-  login starts in 2 min with a 3 s failing start, up to 3 queued at once,
-  the error text overwritten by "Loading QR…"; 1,440 YouTube status
-  requests per hour; both keep polling in a hidden tab. Still on master.
-  PR #9 (`opt/myfollows-20261008-1543`, open) chains each poll after the
-  previous answer, backs automatic start retries off 15 s → 10 min
-  (`LOGIN_RETRY_*`, plus a "Retry now" button), stops the YouTube poll
-  after 10 min (`YT_LOGIN_POLL_MAX_MS`) and pauses both while the tab is
-  hidden (41 → 4 starts in the same 2 min); not tested on a real captcha
-  wall or phone. The backoff is per tab — a server-side cooldown would
-  also change the `douyin_login_start` MCP tool, so it was left out.
+- **A failed Douyin login start must not be retried back-to-back.** Each
+  `/api/login/start` is a full Douyin page load in a fresh context. Until
+  2026-10-08 `checkLogin()` in `ui.html` ran on a 2.5 s `setInterval` and
+  called `startLogin()` whenever no login was in progress, so a failing
+  start (captcha wall, stale selector) was repeated as fast as the server
+  could load the page — 41 page loads in 2 min against a stub server with
+  a 3 s start, up to 3 queued at once, and the error text was overwritten
+  by "Loading QR…" before it could be read. Likewise `pollYoutubeLogin`
+  polled `/api/youtube/status` every 2.5 s forever after an abandoned
+  login window (1,440 requests per hour). Now: each poll is scheduled
+  after the previous one answers, automatic start retries back off
+  15 s → 10 min (`LOGIN_RETRY_*`, with a "Retry now" button), the YouTube
+  poll gives up after 10 min (`YT_LOGIN_POLL_MAX_MS`), and neither polls
+  while the tab is hidden (41 → 4 page loads in the same 2 min). Verified
+  only against a stub server in headless Chromium, not a real captcha
+  wall or a real phone. The backoff is per tab — two open tabs each retry
+  on their own schedule; the server itself has no cooldown.
 - **App source isn't bind-mounted — edits to `ui.html`/`server.py`/etc. need
   a rebuild to take effect.** `docker-compose.yml` only mounts `./data`; the
   Dockerfile `COPY`s `server.py common.py youtube.py ui.html` into the image
