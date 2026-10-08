@@ -142,7 +142,9 @@ README/code.
   while the tab is hidden (41 → 4 page loads in the same 2 min). Verified
   only against a stub server in headless Chromium, not a real captcha
   wall or a real phone. The backoff is per tab — two open tabs each retry
-  on their own schedule; the server itself has no cooldown.
+  on their own schedule; the server itself has no cooldown (it would also
+  change the `douyin_login_start` MCP tool). On master since 2026-10-09
+  (PR #9, `522ac25`; a review reproduced it, 47 → 4 with its own stub).
 - **App source isn't bind-mounted — edits to `ui.html`/`server.py`/etc. need
   a rebuild to take effect.** `docker-compose.yml` only mounts `./data`; the
   Dockerfile `COPY`s `server.py common.py youtube.py ui.html` into the image
