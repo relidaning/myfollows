@@ -132,7 +132,17 @@ README/code.
   stale selector) reopens a Douyin page on every poll. Likewise
   `pollYoutubeLogin` polls `/api/youtube/status` every 2.5 s until login
   succeeds, so an abandoned login window keeps the tab polling forever.
-  Both read from the code 2026-10-02, not reproduced; still open.
+  Reproduced 2026-10-08 against a stub server (headless Chromium): 41
+  login starts in 2 min with a 3 s failing start, up to 3 queued at once,
+  the error text overwritten by "Loading QR…"; 1,440 YouTube status
+  requests per hour; both keep polling in a hidden tab. Still on master.
+  PR #9 (`opt/myfollows-20261008-1543`, open) chains each poll after the
+  previous answer, backs automatic start retries off 15 s → 10 min
+  (`LOGIN_RETRY_*`, plus a "Retry now" button), stops the YouTube poll
+  after 10 min (`YT_LOGIN_POLL_MAX_MS`) and pauses both while the tab is
+  hidden (41 → 4 starts in the same 2 min); not tested on a real captcha
+  wall or phone. The backoff is per tab — a server-side cooldown would
+  also change the `douyin_login_start` MCP tool, so it was left out.
 - **App source isn't bind-mounted — edits to `ui.html`/`server.py`/etc. need
   a rebuild to take effect.** `docker-compose.yml` only mounts `./data`; the
   Dockerfile `COPY`s `server.py common.py youtube.py ui.html` into the image
