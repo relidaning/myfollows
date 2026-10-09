@@ -32,7 +32,7 @@ from fastmcp import FastMCP
 from playwright.async_api import Page, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 import common
 import youtube
@@ -759,16 +759,30 @@ async def youtube_sync_feed(limit: int = 30) -> dict:
 # ---------------------------------------------------------------------------
 
 
+# (mtime_ns, raw bytes, gzipped bytes) of ui.html — see ui_index.
+_ui_cache: Optional[tuple[int, bytes, bytes]] = None
+
+
 @mcp.custom_route("/", methods=["GET"])
 async def ui_index(request: Request) -> Response:
     # No cache headers were being sent at all, which let some browsers serve
     # a stale copy of ui.html across edits during active development —
     # confirmed 2026-07-28 (user kept seeing old player sizing after fixes
     # that tested correctly server-side). Force a fresh fetch every time.
-    return HTMLResponse(
-        open(UI_HTML_PATH, encoding="utf-8").read(),
-        headers={"Cache-Control": "no-store, must-revalidate"},
-    )
+    # no-store also means the whole page (~85 KB) is downloaded on every
+    # open, so gzip it — compressed once per version of the file, not per
+    # request.
+    global _ui_cache
+    mtime = os.stat(UI_HTML_PATH).st_mtime_ns
+    if _ui_cache is None or _ui_cache[0] != mtime:
+        raw = open(UI_HTML_PATH, "rb").read()
+        _ui_cache = (mtime, raw, gzip.compress(raw, compresslevel=9))
+    headers = {"Cache-Control": "no-store, must-revalidate", "Vary": "Accept-Encoding"}
+    body = _ui_cache[1]
+    if "gzip" in request.headers.get("accept-encoding", "").lower():
+        body = _ui_cache[2]
+        headers["Content-Encoding"] = "gzip"
+    return Response(body, media_type="text/html; charset=utf-8", headers=headers)
 
 
 @mcp.custom_route("/api/status", methods=["GET"])
@@ -1153,11 +1167,18 @@ async def api_unlist_creator(request: Request) -> Response:
 async def api_creators(request: Request) -> Response:
     platform_param = request.query_params.get("platform")
     conn = _db()
+    # Unwatched counts come from one grouped pass over videos, joined to
+    # creators. This used to be a correlated COUNT(*) per creator, i.e. a
+    # full videos scan for each of them (~155 ms at 193 creators x 2.5k
+    # videos, measured 2026-10-10) — and the UI reloads this list after
+    # every watched toggle.
     query = (
         "SELECT c.name, c.platform, c.avatar_url, c.unread_count, c.unlisted, "
-        "(SELECT COUNT(*) FROM videos v WHERE v.user = c.name AND v.platform = c.platform "
-        "AND v.watched = 0 AND v.filtered_category IS NULL) AS unwatched_synced "
-        "FROM creators c"
+        "COALESCE(u.n, 0) AS unwatched_synced "
+        "FROM creators c LEFT JOIN ("
+        "SELECT user, platform, COUNT(*) AS n FROM videos "
+        "WHERE watched = 0 AND filtered_category IS NULL GROUP BY user, platform"
+        ") u ON u.user = c.name AND u.platform = c.platform"
     )
     params: list = []
     if platform_param:
