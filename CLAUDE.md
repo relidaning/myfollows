@@ -75,15 +75,16 @@ README/code.
   (`toggleWatched` in `ui.html`), and the handlers run SQLite on the event
   loop, so a slow list also stalls everything else for that long. The
   correlated `COUNT(*)` it used was a full `videos` scan per creator:
-  156 ms at 193 creators x 2,462 videos. Branch
-  `opt/myfollows-20261010-0246` replaces it with one grouped pass joined
-  to `creators` (156 → 3.9 ms, responses byte-identical on a copy of the
-  live DB; measured 2026-10-10 with Starlette TestClient in the existing
-  image). That needs no index, so it makes PR #2 (index on
-  `videos(user, platform)`, held because it changes the stored DB's
-  schema) unnecessary for this endpoint. The same branch gzips `/`
-  (`ui.html`, sent `no-store` so it is downloaded on every open: 86 → 24 KB),
-  cached per file mtime.
+  156 ms at 193 creators x 2,462 videos. PR #10 (merged 2026-10-10,
+  `7778579`) replaced it with one grouped pass joined to `creators`
+  (156 → 3.9 ms, responses byte-identical on a copy of the live DB;
+  measured with Starlette TestClient in the existing image; a review
+  reproduced it, 161.3 → 5.7 ms, and got identical rows from the old and
+  new SQL on randomly mutated copies). That needs no index, so it makes
+  PR #2 (index on `videos(user, platform)`, held because it changes the
+  stored DB's schema, still open) unnecessary for this endpoint. The same
+  PR gzips `/` (`ui.html`, sent `no-store` so it is downloaded on every
+  open: 86 → 24 KB), compressed once per file mtime.
 - **`/api/play` shares one process-wide `httpx.AsyncClient`**
   (`_get_play_client` in `server.py`, PR #4, merged 2026-10-03) — a
   `<video>` sends a new Range request per seek, and building a client per
