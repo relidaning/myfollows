@@ -160,6 +160,29 @@ README/code.
   on their own schedule; the server itself has no cooldown (it would also
   change the `douyin_login_start` MCP tool). On master since 2026-10-09
   (PR #9, `522ac25`; a review reproduced it, 47 → 4 with its own stub).
+- **`_login_page` must be cleared whenever its context is closed.**
+  `_login_poll_impl` (behind `/api/status`) reports `in_progress: true`
+  for as long as `_login_page` is set, even when the page is dead, and
+  `checkLogin()` in `ui.html` never starts a new login while one is in
+  progress. Until 2026-10-11 `_get_context(fresh=True)` closed the context
+  without clearing it, so a login start that failed while a QR was already
+  showing (captcha wall on a second start: two tabs, or the
+  `douyin_login_start` MCP tool) left the overlay on a stale QR until the
+  container was restarted; a start that raised also left its page loaded
+  in the idle browser. Fixed on branch `opt/myfollows-20261011-0353`
+  (stub pages only, not real Douyin). Still open: a QR that is showing is
+  never refreshed when Douyin expires it, so a login left unscanned needs a
+  restart (or a `douyin_login_start` call) to get a new code.
+- **`_refetch_play_url` waits for the `aweme/detail` response, not a fixed
+  time** (same branch): the player's "Refresh link" returns as soon as the
+  response is read, up to `REFETCH_WAIT_MS` (2.55 → 0.41 s against a stub
+  that answers 300 ms after load). `_backfill_play_urls` passes
+  `wait_full=True` to keep its one-page-every-few-seconds pace towards
+  Douyin; don't drop that without deciding the risk-control question.
+  Douyin play URLs in the DB carry a hex timestamp ~11–12 h after
+  `fetched_at` (read as the expiry, not confirmed live), so most of the
+  backlog needs that refresh before it plays, and the UI only does it on a
+  manual click.
 - **App source isn't bind-mounted — edits to `ui.html`/`server.py`/etc. need
   a rebuild to take effect.** `docker-compose.yml` only mounts `./data`; the
   Dockerfile `COPY`s `server.py common.py youtube.py ui.html` into the image
