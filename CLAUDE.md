@@ -169,14 +169,18 @@ README/code.
   showing (captcha wall on a second start: two tabs, or the
   `douyin_login_start` MCP tool) left the overlay on a stale QR until the
   container was restarted; a start that raised also left its page loaded
-  in the idle browser. Fixed on branch `opt/myfollows-20261011-0353`
-  (stub pages only, not real Douyin). Still open: a QR that is showing is
-  never refreshed when Douyin expires it, so a login left unscanned needs a
-  restart (or a `douyin_login_start` call) to get a new code.
+  in the idle browser. Fixed in PR #11 (merged 2026-10-11, `bb1c482`;
+  a review reproduced it, stub pages only, not real Douyin). Still open:
+  a QR that is showing is never refreshed when Douyin expires it, so a
+  login left unscanned needs a restart (or a `douyin_login_start` call)
+  to get a new code.
 - **`_refetch_play_url` waits for the `aweme/detail` response, not a fixed
-  time** (same branch): the player's "Refresh link" returns as soon as the
-  response is read, up to `REFETCH_WAIT_MS` (2.55 → 0.41 s against a stub
-  that answers 300 ms after load). `_backfill_play_urls` passes
+  time** (PR #11, merged 2026-10-11): the player's "Refresh link" returns
+  as soon as the response is read, up to `REFETCH_WAIT_MS` (2.55 → 0.41 s
+  against a stub that answers 300 ms after load; a review got 0.40 s). It
+  therefore uses the first `aweme/detail` response on the page, where the
+  fixed wait used the last one seen (read from the code, not tested).
+  `_backfill_play_urls` passes
   `wait_full=True` to keep its one-page-every-few-seconds pace towards
   Douyin; don't drop that without deciding the risk-control question.
   Douyin play URLs in the DB carry a hex timestamp ~11–12 h after
