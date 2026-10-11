@@ -125,6 +125,11 @@ async def _get_context(fresh: bool):
     if fresh and _context is not None:
         await _context.close()
         _context = None
+        # Closing the context closed any login page in it. Keeping the
+        # reference would make _login_poll_impl report "in_progress" for
+        # good if the login start that follows fails (captcha wall), and the
+        # UI never starts a new login while one is reported in progress.
+        _login_page = None
 
     if _context is None:
         kwargs = {
@@ -171,51 +176,65 @@ async def _login_status_impl() -> dict:
 
 
 async def _login_start_impl() -> dict:
-    global _login_page
     async with _lock:
         ctx = await _get_context(fresh=True)
         page = await ctx.new_page()
-        await page.goto(DOUYIN_HOME, wait_until="domcontentloaded", timeout=30000)
+        try:
+            return await _login_start_on_page(page)
+        except BaseException:
+            # A start that raised (goto timeout, QR never rendered) used to
+            # leave the Douyin home page loaded in the idle browser until
+            # the next login start replaced the context.
+            try:
+                await page.close()
+            except Exception:
+                pass
+            raise
 
-        title = await page.title()
-        if "验证码" in title or "中间页" in title:
+
+async def _login_start_on_page(page: Page) -> dict:
+    global _login_page
+    await page.goto(DOUYIN_HOME, wait_until="domcontentloaded", timeout=30000)
+
+    title = await page.title()
+    if "验证码" in title or "中间页" in title:
+        await page.close()
+        return {
+            "status": "error",
+            "reason": "captcha_wall",
+            "message": (
+                f"Douyin served a CAPTCHA interstitial (page title: {title!r}) instead of "
+                "the app. This is server-side IP/fingerprint risk-control decided before any "
+                "page JS runs — it is not a stale selector, and no client-side flag fixes it. "
+                "Retry later, or run this container from a network Douyin treats as trusted "
+                "(e.g. the same machine/network you normally browse Douyin from)."
+            ),
+        }
+
+    try:
+        await page.wait_for_selector(QR_SELECTOR, timeout=15000)
+    except PlaywrightTimeoutError:
+        login_trigger = page.get_by_text("登录", exact=False).first
+        if await login_trigger.count():
+            await login_trigger.click()
+            await page.wait_for_selector(QR_SELECTOR, timeout=15000)
+        else:
             await page.close()
             return {
                 "status": "error",
-                "reason": "captcha_wall",
-                "message": (
-                    f"Douyin served a CAPTCHA interstitial (page title: {title!r}) instead of "
-                    "the app. This is server-side IP/fingerprint risk-control decided before any "
-                    "page JS runs — it is not a stale selector, and no client-side flag fixes it. "
-                    "Retry later, or run this container from a network Douyin treats as trusted "
-                    "(e.g. the same machine/network you normally browse Douyin from)."
-                ),
+                "reason": "stale_selector",
+                "message": "Could not find the QR login element. Douyin's login markup "
+                "may have changed — inspect the page and update QR_SELECTOR in server.py.",
             }
 
-        try:
-            await page.wait_for_selector(QR_SELECTOR, timeout=15000)
-        except PlaywrightTimeoutError:
-            login_trigger = page.get_by_text("登录", exact=False).first
-            if await login_trigger.count():
-                await login_trigger.click()
-                await page.wait_for_selector(QR_SELECTOR, timeout=15000)
-            else:
-                await page.close()
-                return {
-                    "status": "error",
-                    "reason": "stale_selector",
-                    "message": "Could not find the QR login element. Douyin's login markup "
-                    "may have changed — inspect the page and update QR_SELECTOR in server.py.",
-                }
-
-        # The QR is a Lottie animation that opens on a loading frame before
-        # settling on the actual scannable pattern — wait_for_selector only
-        # confirms the element exists, not that painting is done.
-        qr_el = page.locator(QR_SELECTOR).first
-        await page.wait_for_timeout(2500)
-        await qr_el.screenshot(path=QR_IMAGE_PATH)
-        _login_page = page
-        return {"status": "qr_ready", "qr_image_path": QR_IMAGE_PATH}
+    # The QR is a Lottie animation that opens on a loading frame before
+    # settling on the actual scannable pattern — wait_for_selector only
+    # confirms the element exists, not that painting is done.
+    qr_el = page.locator(QR_SELECTOR).first
+    await page.wait_for_timeout(2500)
+    await qr_el.screenshot(path=QR_IMAGE_PATH)
+    _login_page = page
+    return {"status": "qr_ready", "qr_image_path": QR_IMAGE_PATH}
 
 
 async def _login_wait_impl(timeout_sec: int) -> dict:
@@ -479,14 +498,22 @@ async def _run_sync(limit: int) -> dict:
     }
 
 
-async def _refetch_play_url(page, video_id: str) -> bool:
+# Longest wait for a video page's aweme/detail call after domcontentloaded.
+REFETCH_WAIT_MS = 2500
+
+
+async def _refetch_play_url(page, video_id: str, wait_full: bool = False) -> bool:
     """Visits one video's own page (douyin.com/video/{id}), which triggers
     Douyin's aweme/detail API with full video data including play_addr, and
     writes it straight to that row — always overwrites, regardless of the
     row's current play_url. Shared by both _backfill_play_urls (rows that
     never got one) and _refresh_play_url (a row whose play_url is populated
-    but its signed CDN token has since expired)."""
+    but its signed CDN token has since expired).
+
+    wait_full=True always waits REFETCH_WAIT_MS on the page, which keeps
+    the backfill loop's one-page-every-few-seconds pace towards Douyin."""
     detail = {}
+    got_detail = asyncio.Event()
 
     async def on_response(resp, _store=detail):
         if "aweme/detail" in resp.url:
@@ -494,6 +521,7 @@ async def _refetch_play_url(page, video_id: str) -> bool:
                 _store["body"] = await resp.json()
             except Exception:
                 pass
+            got_detail.set()
 
     page.on("response", on_response)
     try:
@@ -502,7 +530,16 @@ async def _refetch_play_url(page, video_id: str) -> bool:
             wait_until="domcontentloaded",
             timeout=20000,
         )
-        await page.wait_for_timeout(2500)
+        if wait_full:
+            await page.wait_for_timeout(REFETCH_WAIT_MS)
+        else:
+            # Stop as soon as the detail response has been read instead of
+            # always sitting out the full wait — this is what the player's
+            # "Refresh link" button waits on.
+            try:
+                await asyncio.wait_for(got_detail.wait(), REFETCH_WAIT_MS / 1000)
+            except asyncio.TimeoutError:
+                pass
     except PlaywrightTimeoutError:
         pass
     finally:
@@ -557,7 +594,7 @@ async def _backfill_play_urls(limit: int = 50) -> dict:
         page = await ctx.new_page()
         try:
             for (video_id,) in rows:
-                if await _refetch_play_url(page, video_id):
+                if await _refetch_play_url(page, video_id, wait_full=True):
                     updated += 1
         finally:
             await page.close()
