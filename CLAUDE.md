@@ -179,14 +179,17 @@ README/code.
   work is done, so until 2026-10-13 a next-arrow click that couldn't land
   (a popup covering the arrow) raised after Playwright's default 30 s,
   `/api/sync` answered 500 and every video already captured in that run
-  was dropped; a failed sync isn't retried until the next day's slot. On
-  branch `opt/myfollows-20261013-0019` the creator scrape and the click
-  loop catch Playwright errors, the click gives up after
+  was dropped; a failed sync isn't retried until the next day's slot.
+  Since PR #12 (merged 2026-10-13, `9cf8fc3`) the creator scrape and the
+  click loop catch Playwright errors, the click gives up after
   `NEXT_CLICK_TIMEOUT_MS` (10 s), and the result carries `stopped_early`
   (stub page with a popup after 3 clicks: raised after 43.4 s with 0
-  videos saved → 20 videos saved in 23.6 s; a clean run is unchanged).
-  Stub page only, not real Douyin. Keep new page steps in `_run_sync`
-  inside that handling.
+  videos saved → 20 videos saved in 23.6 s; a clean run is unchanged; a
+  review reproduced it, and a failing creator scrape still saved the 25
+  videos). Stub page only, not real Douyin. `ui.html` doesn't show
+  `stopped_early`, so a sync that stopped early looks like a normal one
+  in the UI; only the JSON result and the log say so (read from the
+  code). Keep new page steps in `_run_sync` inside that handling.
 - **`_refetch_play_url` waits for the `aweme/detail` response, not a fixed
   time** (PR #11, merged 2026-10-11): the player's "Refresh link" returns
   as soon as the response is read, up to `REFETCH_WAIT_MS` (2.55 → 0.41 s
