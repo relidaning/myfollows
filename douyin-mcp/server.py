@@ -29,6 +29,7 @@ from typing import Optional
 
 import httpx
 from fastmcp import FastMCP
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from starlette.requests import Request
@@ -75,6 +76,9 @@ NEXT_ARROW_SELECTOR = "[data-e2e='video-switch-next-arrow']"
 SAVE_LOGIN_DIALOG_DISMISS_TEXT = "取消"  # "Cancel" on the post-login "save login info?" prompt
 MAX_NEXT_CLICKS = 40
 NEXT_CLICK_WAIT_MS = 1800
+# A click on the next arrow that can't land (a popup covering it) gives up
+# after this long instead of Playwright's default 30 s.
+NEXT_CLICK_TIMEOUT_MS = 10000
 
 mcp = FastMCP("myfollows")
 
@@ -464,7 +468,17 @@ async def _run_sync(limit: int) -> dict:
                 await dismiss.click()
                 await page.wait_for_timeout(500)
 
-            creators = await _scrape_creators(page)
+            # From here on a failure must not throw away what was already
+            # collected: the sidebar scrape and the next-arrow clicks only
+            # add to it, and a sync that raises saves nothing and isn't
+            # retried until the next day's slot.
+            stopped_early = ""
+            try:
+                creators = await _scrape_creators(page)
+            except PlaywrightError as e:
+                _log.warning("Douyin sync: creator scrape failed, keeping the videos: %s", str(e).splitlines()[0])
+                creators = []
+                stopped_early = "creator scrape failed"
 
             if not items:
                 return {
@@ -476,26 +490,37 @@ async def _run_sync(limit: int) -> dict:
             next_btn = page.locator(NEXT_ARROW_SELECTOR).first
             clicks = 0
             max_clicks = min(limit, MAX_NEXT_CLICKS)
-            while clicks < max_clicks:
-                if await next_btn.count() == 0:
-                    break
-                classes = await next_btn.get_attribute("class") or ""
-                if "disabled" in classes:
-                    break
-                await next_btn.click()
-                clicks += 1
-                await page.wait_for_timeout(NEXT_CLICK_WAIT_MS)
+            try:
+                while clicks < max_clicks:
+                    if await next_btn.count() == 0:
+                        break
+                    classes = await next_btn.get_attribute("class") or ""
+                    if "disabled" in classes:
+                        break
+                    await next_btn.click(timeout=NEXT_CLICK_TIMEOUT_MS)
+                    clicks += 1
+                    await page.wait_for_timeout(NEXT_CLICK_WAIT_MS)
+            except PlaywrightError as e:
+                # First line only: a click timeout carries its whole retry log.
+                _log.warning(
+                    "Douyin sync: stopped after %d next clicks, keeping %d videos: %s",
+                    clicks, len(items), str(e).splitlines()[0],
+                )
+                stopped_early = f"next click failed after {clicks} clicks"
         finally:
             await page.close()
 
     common.upsert_creators(creators, platform="douyin")
     new_count, total = common.upsert_videos(list(items.values()), platform="douyin")
-    return {
+    result = {
         "fetched": len(items),
         "new": new_count,
         "total_in_db": total,
         "creators": len(creators),
     }
+    if stopped_early:
+        result["stopped_early"] = stopped_early
+    return result
 
 
 # Longest wait for a video page's aweme/detail call after domcontentloaded.
