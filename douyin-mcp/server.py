@@ -79,6 +79,9 @@ NEXT_CLICK_WAIT_MS = 1800
 # A click on the next arrow that can't land (a popup covering it) gives up
 # after this long instead of Playwright's default 30 s.
 NEXT_CLICK_TIMEOUT_MS = 10000
+# If the first follow-feed response hasn't arrived after the fixed 5 s, keep
+# waiting up to this much longer before reporting "No feed items found".
+FIRST_FEED_EXTRA_WAIT_MS = 10000
 
 mcp = FastMCP("myfollows")
 
@@ -479,6 +482,15 @@ async def _run_sync(limit: int) -> dict:
                 _log.warning("Douyin sync: creator scrape failed, keeping the videos: %s", str(e).splitlines()[0])
                 creators = []
                 stopped_early = "creator scrape failed"
+
+            # A slow first feed response (network just back after a resume)
+            # is not a changed API: give it more time, on the same page load.
+            waited = 0
+            while not items and waited < FIRST_FEED_EXTRA_WAIT_MS:
+                await page.wait_for_timeout(500)
+                waited += 500
+            if waited and items:
+                _log.info("Douyin sync: first feed response arrived %.1f s late", waited / 1000)
 
             if not items:
                 return {

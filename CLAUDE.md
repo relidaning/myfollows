@@ -190,6 +190,20 @@ README/code.
   `stopped_early`, so a sync that stopped early looks like a normal one
   in the UI; only the JSON result and the log say so (read from the
   code). Keep new page steps in `_run_sync` inside that handling.
+  Branch `opt/myfollows-20261014-0114` (2026-10-14) adds "— stopped
+  early" to the Sync button's status line (`runSync` in `ui.html`, syntax
+  check only) and two more cases of the same kind, both against stub
+  pages, not the real sites: a first `follow/feed/` response later than
+  the fixed 5 s made `_run_sync` answer "No feed items found" (stub
+  answering 8 s after load: 0 → 5 videos saved); it now waits up to
+  `FIRST_FEED_EXTRA_WAIT_MS` (10 s) longer on the same page load, only
+  when nothing has arrived, so a real API change is reported 10 s later.
+  And `youtube.sync` loaded the subscriptions page with a single
+  `page.goto`, although `_goto_retry` exists because the proxy times out
+  intermittently on a first attempt; one timeout was a 500 and no YouTube
+  sync that day (stub hanging on the first request: raised after 30.5 s →
+  5 videos saved in 35.3 s). It now uses `_goto_retry`, which retries
+  timeouts only, so a dead proxy still fails at once.
 - **`_refetch_play_url` waits for the `aweme/detail` response, not a fixed
   time** (PR #11, merged 2026-10-11): the player's "Refresh link" returns
   as soon as the response is read, up to `REFETCH_WAIT_MS` (2.55 → 0.41 s
