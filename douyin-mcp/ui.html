@@ -1754,7 +1754,7 @@ async function runSync() {
   try {
     const res = await fetch('/api/sync?limit=30', { method: 'POST' });
     const data = await res.json();
-    results.push(data.error ? `Douyin: ${data.error}` : `Douyin +${data.new} (${data.total_in_db})`);
+    results.push(data.error ? `Douyin: ${data.error}` : `Douyin +${data.new} (${data.total_in_db})${data.stopped_early ? ' — stopped early' : ''}`);
   } catch (e) {
     results.push('Douyin sync failed');
   }

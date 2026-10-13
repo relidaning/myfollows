@@ -376,7 +376,9 @@ async def sync(limit: int = 30) -> dict:
         ctx = await _get_headless_context(fresh=False)
         page = await ctx.new_page()
         try:
-            await page.goto(SUBSCRIPTIONS_URL, wait_until="domcontentloaded", timeout=30000)
+            # Retried on a timeout (see _goto_retry): a sync that raises here
+            # isn't run again until the next day's slot.
+            await _goto_retry(page, SUBSCRIPTIONS_URL)
             try:
                 await page.wait_for_selector(VIDEO_CARD_SELECTOR, timeout=15000)
             except PlaywrightTimeoutError:
