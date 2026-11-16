@@ -9,7 +9,7 @@ README/code.
 ## Current interface and sync boundaries
 
 - `ui.html` owns the MyFollows home link, full-page settings, creator search,
-  responsive player, seek timeline and SVG action controls. The creator name
+  responsive player, native playback controls and SVG action controls. The creator name
   in playback opens the source video. Settings uses `#settings` routes.
 - `FEED_BATCH_SIZE = 50` controls homepage batches. Keep generation/abort
   guards for stale responses, stable date/ID cursors and the player's separate

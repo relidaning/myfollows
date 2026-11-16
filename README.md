@@ -45,15 +45,17 @@ live in settings. Search and Sync stay visible in the main header.
 
 Phones use larger touch targets, safe-area spacing and a single-column settings
 layout with ordinary page scrolling. Playback adapts to portrait and landscape;
-laptops/desktops request fullscreen when opening a video. The fullscreen button
-or F toggles fullscreen with the timeline and rating controls included. Browsers
-that deny fullscreen retain the full-viewport player. Landscape YouTube videos
+laptops/desktops use the available browser window without entering browser
+fullscreen. The expand button or F hides/restores the description to give the
+video more space while retaining access to native playback and rating controls. Landscape YouTube videos
 fit the available viewport without the former 960px cap.
 
-The player keeps captions aligned with the media, uses quieter text and places
-the action rail just below midpoint. A seekable timeline below the media shows
-elapsed time and duration using native events or YouTube player messages;
-YouTube progress is unavailable until those messages arrive.
+The player uses plain caption text aligned with the video's left edge and
+places the action rail just below midpoint. Progress and seeking use the native
+YouTube or browser video controls; there is no separate app timeline. P pauses
+playback and reveals access to those controls; Space resumes. YouTube controls
+use controls=1; their final visibility is managed by YouTube itself, not an
+unsupported show-controls API.
 
 UI styling and responsive breakpoints live in `douyin-mcp/ui.html`; no frontend
 build step or new dependency is required. Rebuild the image to serve changes.
@@ -328,11 +330,38 @@ Grid (player closed):
   toggles it back to unscored.
 
 Player (open):
+- `1`–`5` — score the current video; the rating dialog shows five clickable stars followed by a single matching description (Not interesting / Fine / Great / Excellent / Unbelievable). Text fields retain normal number entry.
 - `Space` — pause/resume
-- `↑`/`↓` — volume ±10%, clamped [0%, 100%]
+- `↑` — volume +10%, clamped at 100%
+- `↓` — next video; pauses and opens Rate & tag if the current video needs a rating or label. After filling both in, press `↓` again to continue.
 - `←`/`→` — seek ±5s
-- `f` — toggle fullscreen (player, timeline and rating controls)
+- `p` — pause and reveal native playback controls/timeline; `Space` resumes
+- `f` — expand the video within the browser window by hiding the description; press again to restore it. No browser fullscreen is requested.
 - `Escape` / click outside / ✕ — close
+
+The player fills the browser window without requesting browser fullscreen.
+Plain title/channel text sits below the video, aligned to its left edge, with
+no panel background or border. Desktop descriptions are capped at 96px;
+long descriptions scroll without navigating videos. P pauses and uncovers native
+controls. Space resumes, including when the native video controls have focus.
+The separate custom progress bar has been removed.
+
+While the player is open, an early window-capture handler owns unmodified Space
+on keydown, keypress and keyup, so document-level speed-controller extensions
+cannot toggle playback a second time. Text inputs and modified shortcuts keep
+their normal behavior; the tagging dialog still uses Space to select tags.
+The rail includes a clickable Play / pause button as a fallback. A webpage
+cannot override an extension that has already stopped the event in an earlier
+window-capture listener, or intercept keys inside a cross-origin YouTube frame.
+Those cases may require changing the extension's Space shortcut.
+Offline conflict checks: `python3 tests/keyboard_conflict_browser.py` uses
+simulated extension handlers, not the user's browser profile.
+
+In Rate & tag, h/l moves between tag chips and j/k moves between wrapped rows. Space toggles the focused tag; 1–5 selects a score. Enter or **Save & next** waits for the rating and tags to save before advancing (both a score and at least one tag are required). Failed saves keep the dialog open for retry. Typed custom tags are committed with Enter or when leaving the input; Escape cancels the new tag. New tags are immediately added to the chip set and filter and are recovered from saved video labels on reload. The dialog has no Unlist action; the YouTube channel action reads **Unsubscribe channel**.
+
+Offline browser verification: `python3 tests/tagging_browser.py` for tagging and `python3 tests/playback_browser.py` for window sizing and pause/resume (requires Python Playwright and its Chromium browser; all requests use synthetic fixtures).
+
+Playback ends without looping and opens Rate & tag for the current video on both platforms. Text fields keep their normal keyboard behavior.
 
 Playback defaults to 1.75x speed (`DEFAULT_PLAYBACK_RATE` in `ui.html`) —
 set directly via `playerVideo.playbackRate` for Douyin's native `<video>`,
@@ -653,6 +682,8 @@ cards that appear (title, channel, video id, thumbnail, relative time text).
   card doesn't reliably expose a per-channel avatar image the way Douyin's
   follow sidebar does, so YouTube creator rows just have no avatar (the UI
   hides the broken-image icon via `onerror`).
+- **YouTube errors 101/150 mean embedding is disallowed.** On narrow screens (up to 860px), an Open in YouTube button is always present below the media for YouTube videos, even when the iframe sends no error event. Wide screens keep embedded playback without that extra footer button. The fallback also provides the link and hides Retry for these errors. The user returns manually to MyFollows to rate/tag; external playback completion cannot be observed by this app. Other errors retain Retry.
+
 - **YouTube iframe silence is not evidence of bot blocking.** Playback may
   work while no state messages arrive. `armYtFallbackTimer` only adds a
   source-link hint after nine seconds; it must never hide, reload or replace

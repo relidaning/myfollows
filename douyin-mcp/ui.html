@@ -8,6 +8,25 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MyFollows">
 <title>MyFollows</title>
+<script>
+// Register before page scripts: Space belongs to the app while its player
+// is open. Capture at window level also precedes document-level extension
+// handlers, regardless of when those handlers were registered.
+for (const type of ['keydown', 'keypress', 'keyup']) {
+  window.addEventListener(type, event => {
+    if (event.key !== ' ' && event.code !== 'Space') return;
+    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+    if (!document.getElementById('playerOverlay')?.classList.contains('show')) return;
+    if (typeof window.myfollowsKeydown !== 'function') return;
+    const isEditing = node => node &&
+      (['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName) || node.isContentEditable);
+    if (isEditing(document.activeElement) || event.composedPath().some(isEditing)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (type === 'keydown') window.myfollowsKeydown(event);
+  }, {capture: true});
+}
+</script>
 <style>
   :root {
     --bg: #10141c;
@@ -344,6 +363,13 @@
   #playerFallback.show { display: block; }
   #playerFallback p { margin: 0 0 12px; }
   #playerRefreshBtn { font-size: 12px; padding: 7px 14px; }
+  #playerExternalLink, #playerYoutubeLink {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 44px; padding: 10px 18px; margin: 4px;
+    background: var(--cyan); color: var(--bg); border-radius: 8px;
+    font-size: 14px; font-weight: 600; text-decoration: none;
+  }
+  #playerExternalLink[hidden], #playerYoutubeLink[hidden] { display: none; }
 
   /* Deliberately understated now that vertical scroll/swipe is the primary
      way to move between videos — this is just an escape hatch back to the
@@ -358,20 +384,9 @@
   }
   #playerClose:hover { color: var(--coral); }
 
-  /* Thin scrub bar pinned to the very bottom edge of the screen, TikTok-
-     style, tracking the native <video>'s currentTime/duration via the
-     'timeupdate' listener below. YouTube's iframe embed doesn't expose
-     currentTime across origins without a much bigger postMessage polling
-     setup, so it just stays flat for YouTube videos. */
-  #playerProgressTrack {
-    position: absolute; left: 0; right: 0; bottom: env(safe-area-inset-bottom); height: 3px; z-index: 7;
-    background: rgba(255,255,255,0.25);
-  }
-  #playerProgressFill { height: 100%; width: 0%; background: var(--cyan); }
-
   /* TikTok-style right-side action rail: Star and Watch later are direct
      single-tap toggles; the tag icon opens #playerSheet below for
-     score/labels/Unfollow/Unlist instead of showing them inline. Hoisted
+     rating, tags and channel actions instead of showing them inline. Hoisted
      well clear of #playerInfoOverlay's bottom edge (rather than anchored
      just above the video's native controls, as before) now that the
      overlay holds a multi-line title/channel/date stack instead of a single
@@ -437,16 +452,17 @@
   }
   #playerSheetBackdrop.show { display: block; }
   #playerSheet {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 64;
-    max-width: 480px; margin: 0 auto;
-    max-height: 70vh; overflow-y: auto; overscroll-behavior: contain;
-    background: var(--panel); border: 1px solid var(--line); border-bottom: none;
-    border-radius: 16px 16px 0 0;
+    position: fixed; left: 50%; top: 50%; z-index: 64;
+    width: min(480px, calc(100vw - 32px)); box-sizing: border-box;
+    max-height: calc(100dvh - 48px); overflow-y: auto; overscroll-behavior: contain;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 16px;
     padding: 14px 16px max(14px, env(safe-area-inset-bottom));
-    transform: translateY(100%);
-    transition: transform 0.22s ease;
+    transform: translate(-50%, -50%);
+    visibility: hidden; opacity: 0; pointer-events: none;
+    transition: opacity 0.22s ease, visibility 0.22s ease;
   }
-  #playerSheet.show { transform: translateY(0); }
+  #playerSheet.show { visibility: visible; opacity: 1; pointer-events: auto; }
   #playerSheet .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
   #playerSheet .sheet-head h3 { margin: 0; font-size: 14px; color: var(--text-dim); font-weight: 600; }
   #playerSheetClose {
@@ -456,19 +472,24 @@
   }
   #playerSheetClose:hover { border-color: var(--coral); color: var(--coral); }
   #playerSheet .sheet-body { display: flex; flex-direction: column; gap: 16px; }
-  #playerSheet .score-stars .star { font-size: 24px; }
+  #playerScoreRow { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  #playerStars { display: flex; flex-direction: row; gap: 0; flex-shrink: 0; }
+  #playerSheet #playerStars .star {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; min-height: 44px; padding: 0;
+    border: none; background: transparent; font-size: 28px;
+  }
+  #playerScoreDescription { font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
   #playerSheet .labels-row { justify-content: flex-start; }
   #playerSheetActions { display: flex; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
   #playerSheetActions button { flex: 1; padding: 10px; font-size: 13px; border-radius: 8px; }
   #playerUnfollowBtn { background: transparent; border: 1px solid var(--line); color: var(--text-dim); }
   #playerUnfollowBtn:hover:not(:disabled) { border-color: var(--coral); color: var(--coral); }
   #playerUnfollowBtn:disabled { opacity: 0.5; cursor: default; }
-  /* Purely a local DB flag (see /api/creators/unlist) — sized/colored as a
-     reversible toggle (cyan), not destructive (coral) like Unfollow, since
-     it never touches the real account. */
-  #playerUnlistBtn { background: transparent; border: 1px solid var(--line); color: var(--text-dim); }
-  #playerUnlistBtn:hover { border-color: var(--cyan); color: var(--cyan); }
-  #playerUnlistBtn.active { background: var(--cyan); border-color: var(--cyan); color: #0b0b0d; }
+  .tag-key-help { margin: 0; color: var(--text-dim); font-size: 12px; line-height: 1.5; }
+  #playerTagStatus { margin: 0; color: var(--coral); font-size: 13px; }
+  #playerTagStatus:empty { display: none; }
+  #playerLabels .label-chip:focus { outline: 2px solid var(--cyan); outline-offset: 3px; }
 
   #channelHeader {
     display: flex; align-items: center; gap: 10px;
@@ -628,22 +649,48 @@
     *, *::before, *::after { transition: none !important; animation: none !important; }
   }
 
-  /* Reserve a real footer below the media, including on portrait phones. */
-  #playerMediaWrap { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
-  #playerCard video { max-height: calc(100dvh - 56px - env(safe-area-inset-bottom)); }
-  #playerCard iframe { max-height: calc(100dvh - 56px - env(safe-area-inset-bottom)); max-width: min(100vw, calc((100dvh - 56px - env(safe-area-inset-bottom)) * 16 / 9)); }
-  #playerProgressTrack {
-    top: var(--media-end, calc(100% - 56px)); bottom: auto;
-    left: var(--media-left, 0px); right: var(--media-inset, 0px);
-    height: 48px; padding: 0 12px; display: flex; align-items: center; gap: 10px;
-    background: #000; color: #a1adbf; font-size: 11px; font-variant-numeric: tabular-nums;
-    touch-action: none;
+  /* Keep plain captions below the media; progress belongs to the native player. */
+  #playerOverlay { touch-action: pan-y; }
+  #playerCard {
+    display: grid; grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    justify-content: stretch; align-items: stretch;
   }
-  .seek-track { position: relative; flex: 1; height: 4px; border-radius: 2px; background: #394252; }
-  #playerProgressFill { border-radius: 2px; pointer-events: none; }
-  #playerSeek { position: absolute; inset: -20px 0; width: 100%; height: 44px; margin: 0; opacity: 0; cursor: pointer; touch-action: none; }
-  .seek-track:focus-within { outline: 2px solid var(--cyan); outline-offset: 5px; }
-
+  @media (min-width: 861px) {
+    #playerInfoOverlay #playerYoutubeLink { display: none; }
+  }
+  #playerMediaWrap {
+    min-height: 0; padding: 0; container-type: size; touch-action: none;
+    display: grid; grid-template-rows: minmax(0, 1fr);
+    justify-items: center; align-items: center;
+  }
+  #playerCard video {
+    grid-row: 1; grid-column: 1;
+    max-width: 100%; max-height: 100%;
+  }
+  #playerCard iframe {
+    grid-row: 1; grid-column: 1;
+    width: min(100cqw, calc(100cqh * 16 / 9));
+    max-width: 100%; max-height: 100cqh;
+  }
+  #playerFallback { grid-row: 1; grid-column: 1; max-height: 100%; overflow-y: auto; }
+  #playerInfoOverlay {
+    position: static; min-width: 0; width: var(--video-width, 100%);
+    margin-left: var(--video-left, 0px);
+    max-height: 28dvh; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
+    padding: 8px 0 max(10px, env(safe-area-inset-bottom));
+    background: transparent; border: none; text-align: left;
+    align-items: flex-start;
+  }
+  #playerTitleRow, #playerLink, #playerChannelRow { max-width: none; }
+  #playerOverlay.video-focus #playerInfoOverlay { display: none; }
+  @media (min-width: 861px) {
+    #playerInfoOverlay { max-height: 96px; }
+  }
+  #playerTitleRow .title {
+    display: block; overflow: visible; -webkit-line-clamp: unset;
+    font-size: 13px; line-height: 1.5;
+  }
   #playerFullscreen {
     position: absolute; top: max(12px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left));
     width: 44px; height: 44px; z-index: 9; padding: 0; border: 0;
@@ -801,37 +848,33 @@
 
 <div id="playerOverlay">
   <div id="playerCard">
-    <button id="playerFullscreen" aria-label="Toggle fullscreen" title="Fullscreen (F)">⛶</button>
+    <button id="playerFullscreen" aria-label="Expand video within window" title="Expand video within window (F)" aria-pressed="false">⛶</button>
     <button id="playerClose" aria-label="Close">✕</button>
     <div id="playerMediaWrap">
       <span id="speedBadge"></span>
-      <video id="playerVideo" autoplay playsinline loop></video>
+      <video id="playerVideo" autoplay playsinline></video>
       <iframe id="playerFrame" class="hidden" title="YouTube video player" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe>
       <div id="playerYtCapture" class="hidden"></div>
       <div id="playerFallback">
         <p id="playerFallbackMsg">Playback isn't available right now — this can happen either because the video was synced before we started saving playable links, or because Douyin's saved link expired (its signed CDN URL is only valid for about a day).</p>
+        <a id="playerExternalLink" href="https://www.youtube.com/" target="_blank" rel="noopener" hidden>Open in YouTube</a>
         <button id="playerRefreshBtn">Refresh link</button>
-      </div>
-      <div id="playerProgressTrack" aria-label="Playback progress">
-        <span id="playerElapsed">0:00</span>
-        <div class="seek-track"><div id="playerProgressFill"></div><input id="playerSeek" type="range" min="0" max="1000" value="0" disabled aria-label="Seek video"></div>
-        <span id="playerDuration">--:--</span>
       </div>
       <!-- TikTok-style right-side action rail: Star and Watch later are
            direct single-tap toggles; the tag icon opens #playerSheet below
-           for score/labels/Unfollow/Unlist instead of showing them inline. -->
+           for rating, tags and channel actions instead of showing them inline. -->
       <div id="playerRail">
+        <button id="playerPauseToggle" class="rail-btn" title="Play / pause (Space)" aria-label="Play or pause video"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 5 9 7-9 7zM17 5v14M21 5v14"/></svg></button>
         <button id="playerStarToggle" class="rail-btn" title="Star for later review" aria-label="Star video" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9z"/></svg></button>
         <button id="playerWatchLaterToggle" class="rail-btn" title="Watch later" aria-label="Watch later" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></button>
         <button id="playerSheetToggle" class="rail-btn" title="Rate and tag" aria-label="Rate and tag" aria-expanded="false" aria-controls="playerSheet">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13.5 13.5 20a2 2 0 0 1-2.8 0L3 12.3V4h8.3l8.7 6.7a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="8" r="1"/></svg><span class="rail-badge" id="playerRailBadge"></span>
         </button>
       </div>
-      <!-- Title below the player, channel name under the title, published
-           date after the channel name — overlaid on the video's bottom edge
-           since the video itself is full-viewport and leaves no flow room
-           below it. -->
+    </div>
+    <!-- Plain description stays below the media. -->
       <div id="playerInfoOverlay">
+        <a id="playerYoutubeLink" href="https://www.youtube.com/" target="_blank" rel="noopener" hidden>Open in YouTube</a>
         <div id="playerTitleRow">
           <div class="title" id="playerTitle"></div>
         </div>
@@ -842,7 +885,6 @@
           <span id="playerDate"></span>
         </div>
       </div>
-    </div>
   </div>
 </div>
 
@@ -853,10 +895,15 @@
     <button id="playerSheetClose" aria-label="Close">✕</button>
   </div>
   <div class="sheet-body">
-    <span class="score-stars" id="playerStars"></span>
+    <div id="playerScoreRow">
+      <span class="score-stars" id="playerStars" role="group" aria-label="Score from 1 to 5"></span>
+      <span id="playerScoreDescription" role="status"></span>
+    </div>
     <div class="labels-row" id="playerLabels"></div>
+    <p class="tag-key-help">h/j/k/l: move · Space: select · 1–5: score · Enter: save &amp; next</p>
+    <p id="playerTagStatus" role="status"></p>
     <div id="playerSheetActions">
-      <button id="playerUnlistBtn" title="Hide this creator's videos from your feed without unfollowing"></button>
+      <button id="playerSubmitBtn" class="primary">Save &amp; next</button>
       <button id="playerUnfollowBtn"></button>
     </div>
   </div>
@@ -960,6 +1007,8 @@ const playerVideo = document.getElementById('playerVideo');
 const playerFrame = document.getElementById('playerFrame');
 const playerYtCapture = document.getElementById('playerYtCapture');
 const playerFallback = document.getElementById('playerFallback');
+const playerExternalLink = document.getElementById('playerExternalLink');
+const playerYoutubeLink = document.getElementById('playerYoutubeLink');
 const playerTitle = document.getElementById('playerTitle');
 const playerChannelRow = document.getElementById('playerChannelRow');
 const playerPlatformBadge = document.getElementById('playerPlatformBadge');
@@ -967,7 +1016,6 @@ const playerChannelName = document.getElementById('playerChannelName');
 const playerSourceLink = document.getElementById('playerSourceLink');
 const playerYtNotice = document.getElementById('playerYtNotice');
 const playerDate = document.getElementById('playerDate');
-const playerProgressFill = document.getElementById('playerProgressFill');
 const playerUnfollowBtn = document.getElementById('playerUnfollowBtn');
 const playerClose = document.getElementById('playerClose');
 const speedBadge = document.getElementById('speedBadge');
@@ -975,21 +1023,39 @@ const playerStars = document.getElementById('playerStars');
 const playerLabels = document.getElementById('playerLabels');
 const playerStarToggle = document.getElementById('playerStarToggle');
 const playerWatchLaterToggle = document.getElementById('playerWatchLaterToggle');
-const playerUnlistBtn = document.getElementById('playerUnlistBtn');
+const playerSubmitBtn = document.getElementById('playerSubmitBtn');
+const playerTagStatus = document.getElementById('playerTagStatus');
 const playerSheetToggle = document.getElementById('playerSheetToggle');
 const playerRailBadge = document.getElementById('playerRailBadge');
 const playerSheet = document.getElementById('playerSheet');
 const playerSheetBackdrop = document.getElementById('playerSheetBackdrop');
 const playerSheetClose = document.getElementById('playerSheetClose');
 
-// The rate/tag bottom sheet (score + labels + Unfollow/Unlist) — hidden by
+// The centered rate/tag dialog (rating, tags and channel actions) — hidden by
 // default, opened via the rail's tag icon, same idea as TikTok tucking
 // comments behind one icon instead of showing them inline under the video.
-function openSheet() { playerSheetToggle.setAttribute('aria-expanded', 'true'); playerSheet.classList.add('show'); playerSheetBackdrop.classList.add('show'); }
+function openSheet() {
+  playerSheetToggle.setAttribute('aria-expanded', 'true');
+  playerSheet.classList.add('show'); playerSheetBackdrop.classList.add('show');
+  playerTagStatus.textContent = '';
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (playerSheet.classList.contains('show') && !playerSheet.contains(document.activeElement)) {
+      playerLabels.querySelector('[data-label]')?.focus();
+    }
+  }));
+}
 function closeSheet() { playerSheetToggle.setAttribute('aria-expanded', 'false'); playerSheet.classList.remove('show'); playerSheetBackdrop.classList.remove('show'); }
 playerSheetToggle.addEventListener('click', openSheet);
 playerSheetClose.addEventListener('click', closeSheet);
 playerSheetBackdrop.addEventListener('click', closeSheet);
+// Visibility transitions can temporarily reject focus. Restore the tag cursor
+// once the sheet has appeared, without moving it away from an edited field.
+playerSheet.addEventListener('transitionend', () => {
+  if (playerSheet.classList.contains('show') && !playerSheet.contains(document.activeElement)) {
+    playerLabels.querySelector('[data-label]')?.focus();
+  }
+});
+
 
 let activeUser = '';
 let currentPlatform = null;
@@ -1055,7 +1121,9 @@ let playerVideos = [];
 function openPlayer(v) {
   if (!playerOverlay.classList.contains('show')) playerVideos = currentVideos.slice();
   playbackGeneration++;
+  closeSheet();
   playbackRecoveryAttempted = false;
+  playerVideo.controls = true;
   playerYtNotice.textContent = '';
   playerFallbackMsg.textContent = 'This video could not be played. Retry or open it on the source platform.';
   lockBodyScroll();
@@ -1065,16 +1133,20 @@ function openPlayer(v) {
   playerChannelName.textContent = `@${v.user || 'unknown'}`;
   playerDate.textContent = fmtDateWithAge(v.published_at);
   playerSourceLink.href = v.url;
+  playerExternalLink.hidden = v.platform !== 'youtube';
+  playerExternalLink.href = v.platform === 'youtube'
+    ? `https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}` : 'https://www.youtube.com/';
+  playerYoutubeLink.hidden = v.platform !== 'youtube';
+  playerYoutubeLink.href = playerExternalLink.href;
+  playerRefreshBtn.hidden = false;
   playerSourceLink.setAttribute('aria-label', `Open this video on ${v.platform === 'youtube' ? 'YouTube' : 'Douyin'}`);
   playerSourceLink.title = v.platform === 'youtube' ? 'Open video on YouTube' : 'Open video on Douyin';
   playerUnfollowBtn.disabled = false;
-  playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe' : 'Unfollow';
+  playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe channel' : 'Unfollow channel';
   playerOverlay.classList.add('show');
-  if (window.matchMedia('(min-width: 861px) and (pointer: fine)').matches) requestPlayerFullscreen();
   currentPlatform = v.platform;
   currentVideo = v;
   playerRefreshBtn.disabled = false;
-  updatePlaybackProgress(0, 0);
   clearTimeout(ytFallbackTimer); // stop any pending "blocked" check armed for
     // whatever was playing before — otherwise it could fire later and show
     // the YouTube fallback message over an unrelated (possibly Douyin) video
@@ -1096,10 +1168,7 @@ function openPlayer(v) {
     playerFallback.classList.remove('show');
     playerFrame.classList.remove('hidden');
     playerYtCapture.classList.remove('hidden');
-    // loop=1 only repeats a single video (rather than the whole "up next"
-    // queue) when paired with playlist=<same id> — YouTube's documented
-    // quirk for looping one embedded video.
-    playerFrame.src = `https://www.youtube.com/embed/${v.id}?autoplay=1&playsinline=1&enablejsapi=1&loop=1&playlist=${v.id}&origin=${encodeURIComponent(location.origin)}`;
+    playerFrame.src = `https://www.youtube.com/embed/${v.id}?autoplay=1&playsinline=1&controls=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
     armYtFallbackTimer();
   } else {
     playerFrame.classList.add('hidden');
@@ -1132,8 +1201,9 @@ function positionPlayerChrome() {
   const railHeight = document.getElementById('playerRail').getBoundingClientRect().height;
   const railCenter = Math.max(64 + railHeight / 2, Math.min(host.height * .54, bounds.bottom - host.top - railHeight / 2 - 12));
   style.setProperty('--rail-center', `${railCenter}px`);
-  style.setProperty('--media-end', `${bounds.bottom - host.top}px`);
-  style.setProperty('--media-bottom', `${Math.max(0, host.bottom - bounds.bottom)}px`);
+  const captionStyle = document.getElementById('playerCard').style;
+  captionStyle.setProperty('--video-left', `${bounds.width ? left : 0}px`);
+  captionStyle.setProperty('--video-width', `${bounds.width || host.width}px`);
 }
 const playerLayoutObserver = new ResizeObserver(positionPlayerChrome);
 playerLayoutObserver.observe(playerVideo);
@@ -1146,7 +1216,79 @@ window.addEventListener('resize', positionPlayerChrome);
 // depend on which video is currently loaded. playerStarToggle itself is a
 // static element (its click listener is wired once, below, not here) —
 // only its label/active class needs updating per video.
+const SCORE_DESCRIPTIONS = ['Not interesting', 'Fine', 'Great', 'Excellent', 'Unbelievable'];
+
+let playerSaveQueue = Promise.resolve();
+function queuePlayerSave(v) {
+  const id = v.id, score = v.interest_score ?? null, labels = [...(v.labels || [])];
+  const saving = playerSaveQueue.catch(() => {}).then(async () => {
+    await setScore(id, score);
+    await setLabels(id, labels);
+  });
+  playerSaveQueue = saving;
+  saving.catch(() => {
+    if (currentVideo?.id === id) playerTagStatus.textContent = 'Could not save. Press Enter to retry.';
+  });
+  return saving;
+}
+
+function rememberLabelCategories(labels) {
+  for (const label of labels) {
+    if (!allLabelCategories.some(existing => existing.toLowerCase() === label.toLowerCase())) {
+      allLabelCategories.push(label);
+    }
+    if (![...labelFilter.options].some(option => option.value === label)) {
+      const option = document.createElement('option');
+      option.value = label; option.textContent = label.replace(/_/g, ' ');
+      labelFilter.appendChild(option);
+    }
+  }
+}
+
+let submittingTags = false;
+async function submitPlayerTags() {
+  if (!currentVideo || submittingTags) return;
+  if (!isRatedAndTagged(currentVideo)) {
+    playerTagStatus.textContent = 'Choose a score and at least one tag.';
+    return;
+  }
+  const video = currentVideo, generation = playbackGeneration;
+  submittingTags = true; playerSubmitBtn.disabled = true;
+  playerTagStatus.textContent = 'Saving…';
+  try {
+    await queuePlayerSave(video);
+    if (generation !== playbackGeneration) return;
+    closeSheet();
+    await goToVideo(1);
+  } catch {
+    if (generation === playbackGeneration) playerTagStatus.textContent = 'Could not save. Press Enter to retry.';
+  } finally {
+    submittingTags = false; playerSubmitBtn.disabled = false;
+  }
+}
+playerSubmitBtn.addEventListener('click', submitPlayerTags);
+
+function moveTagCursor(key) {
+  const chips = [...playerLabels.querySelectorAll('[data-label]')];
+  if (!chips.length) return;
+  let index = chips.indexOf(document.activeElement);
+  if (index < 0) { chips[0].focus(); return; }
+  if (key === 'h' || key === 'l') {
+    chips[Math.max(0, Math.min(chips.length - 1, index + (key === 'h' ? -1 : 1)))].focus();
+    return;
+  }
+  const from = chips[index].getBoundingClientRect();
+  const centerX = from.left + from.width / 2;
+  const candidates = chips.map(chip => ({chip, box: chip.getBoundingClientRect()}))
+    .filter(({box}) => key === 'j' ? box.top > from.top + 2 : box.top < from.top - 2);
+  candidates.sort((a, b) =>
+    (Math.abs(a.box.top - from.top) - Math.abs(b.box.top - from.top)) ||
+    (Math.abs(a.box.left + a.box.width / 2 - centerX) - Math.abs(b.box.left + b.box.width / 2 - centerX)));
+  candidates[0]?.chip.focus();
+}
+
 function renderPlayerMark(v) {
+  const focusedLabel = playerLabels.contains(document.activeElement) ? document.activeElement.dataset.label : null;
   // Rail icons are icon-only (no label text — there's no room in a 46px
   // circle), with the active/inactive state carried by the filled vs.
   // outline glyph plus the .active background color set in CSS.
@@ -1165,17 +1307,17 @@ function renderPlayerMark(v) {
   playerRailBadge.textContent = v.interest_score ? v.interest_score : ((v.labels || []).length ? '•' : '');
   playerRailBadge.classList.toggle('show', !!(v.interest_score || (v.labels || []).length));
 
-  playerUnlistBtn.textContent = v.unlisted ? 'Relist' : 'Unlist';
-  playerUnlistBtn.classList.toggle('active', !!v.unlisted);
 
   playerStars.innerHTML = [1,2,3,4,5].map(n =>
-    `<button class="star${v.interest_score >= n ? ' filled' : ''}" data-score="${n}">★</button>`
+    `<button class="star${v.interest_score >= n ? ' filled' : ''}" data-score="${n}" aria-pressed="${v.interest_score === n}" aria-label="${n} ${n === 1 ? 'star' : 'stars'}: ${SCORE_DESCRIPTIONS[n - 1]}"><span aria-hidden="true">${v.interest_score >= n ? '★' : '☆'}</span></button>`
   ).join('');
+  document.getElementById('playerScoreDescription').textContent =
+    SCORE_DESCRIPTIONS[v.interest_score - 1] || 'Choose a score (1–5)';
   playerStars.querySelectorAll('.star').forEach(starBtn => {
     starBtn.addEventListener('click', () => {
       const n = parseInt(starBtn.dataset.score, 10);
       v.interest_score = v.interest_score === n ? null : n; // clicking the active score clears it
-      setScore(v.id, v.interest_score);
+      queuePlayerSave(v);
       renderPlayerMark(v);
     });
   });
@@ -1186,7 +1328,7 @@ function renderPlayerMark(v) {
   // allLabelCategories but must still show up as an active chip).
   const chipLabels = [...new Set([...allLabelCategories, ...activeLabels])];
   playerLabels.innerHTML = chipLabels.map(label =>
-    `<span class="label-chip${activeLabels.includes(label) ? ' active' : ''}" data-label="${escapeHtml(label)}">${escapeHtml(label.replace(/_/g, ' '))}</span>`
+    `<button type="button" class="label-chip${activeLabels.includes(label) ? ' active' : ''}" data-label="${escapeHtml(label).replace(/"/g, '&quot;')}" aria-pressed="${activeLabels.includes(label)}">${escapeHtml(label.replace(/_/g, ' '))}</button>`
   ).join('') + `
     <button class="label-chip label-add" id="labelAddBtn" type="button">+</button>
     <input class="label-add-input hidden" id="labelAddInput" placeholder="new label" maxlength="30">
@@ -1197,7 +1339,7 @@ function renderPlayerMark(v) {
       const labels = v.labels || (v.labels = []);
       const idx = labels.indexOf(label);
       if (idx === -1) labels.push(label); else labels.splice(idx, 1);
-      setLabels(v.id, labels);
+      queuePlayerSave(v);
       renderPlayerMark(v);
     });
   });
@@ -1209,25 +1351,31 @@ function renderPlayerMark(v) {
     addInput.classList.remove('hidden');
     addInput.focus();
   });
-  addInput.addEventListener('keydown', (e) => {
-    e.stopPropagation(); // don't let the grid's vim-style shortcuts eat these keystrokes
-    if (e.key === 'Enter') {
-      const label = addInput.value.trim();
+  let addFinished = false;
+  function finishNewLabel(cancel = false) {
+    if (addFinished) return;
+    addFinished = true;
+    const label = addInput.value.trim();
+    if (!cancel && label) {
+      const existing = allLabelCategories.find(l => l.toLowerCase() === label.toLowerCase()) || label;
       const labels = v.labels || (v.labels = []);
-      if (label && !labels.some(l => l.toLowerCase() === label.toLowerCase())) {
-        labels.push(label);
-        setLabels(v.id, labels);
-        // Make the new tag immediately selectable on other videos too, not just this one.
-        if (!allLabelCategories.some(l => l.toLowerCase() === label.toLowerCase())) {
-          allLabelCategories.push(label);
-        }
-      }
-      renderPlayerMark(v);
-    } else if (e.key === 'Escape') {
-      renderPlayerMark(v);
+      if (!labels.some(l => l.toLowerCase() === existing.toLowerCase())) labels.push(existing);
+      rememberLabelCategories([existing]);
+      queuePlayerSave(v);
+    }
+    renderPlayerMark(v);
+    if (playerSheet.classList.contains('show')) playerLabels.querySelector('[data-label]')?.focus();
+  }
+  addInput.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter' || e.key === 'Escape') {
+      e.preventDefault(); finishNewLabel(e.key === 'Escape');
     }
   });
-  addInput.addEventListener('blur', () => renderPlayerMark(v));
+  addInput.addEventListener('blur', () => finishNewLabel());
+  if (focusedLabel) {
+    [...playerLabels.querySelectorAll('[data-label]')].find(chip => chip.dataset.label === focusedLabel)?.focus();
+  }
 }
 
 playerVideo.addEventListener('loadedmetadata', () => {
@@ -1241,43 +1389,6 @@ playerVideo.addEventListener('loadedmetadata', () => {
   if (playerVideo.videoWidth && playerVideo.videoHeight) {
     playerVideo.style.aspectRatio = `${playerVideo.videoWidth} / ${playerVideo.videoHeight}`;
   }
-});
-
-// Shared timeline for native video events and YouTube infoDelivery messages.
-let playbackDuration = 0;
-function formatPlaybackTime(value) {
-  const seconds = Math.max(0, Math.floor(value));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-}
-function updatePlaybackProgress(current, duration) {
-  if (Number.isFinite(duration) && duration > 0) playbackDuration = duration;
-  else playbackDuration = 0;
-  const time = Number.isFinite(current) ? Math.max(0, Math.min(current, playbackDuration)) : 0;
-  const fraction = playbackDuration ? time / playbackDuration : 0;
-  playerProgressFill.style.width = `${fraction * 100}%`;
-  const seek = document.getElementById('playerSeek');
-  seek.value = Math.round(fraction * 1000);
-  seek.disabled = !playbackDuration;
-  seek.setAttribute('aria-valuetext', `${formatPlaybackTime(time)} of ${playbackDuration ? formatPlaybackTime(playbackDuration) : 'unknown duration'}`);
-  document.getElementById('playerElapsed').textContent = formatPlaybackTime(time);
-  document.getElementById('playerDuration').textContent = playbackDuration ? formatPlaybackTime(playbackDuration) : '--:--';
-}
-for (const event of ['timeupdate', 'durationchange', 'loadedmetadata']) {
-  playerVideo.addEventListener(event, () => {
-    if (currentPlatform === 'douyin') updatePlaybackProgress(playerVideo.currentTime, playerVideo.duration);
-  });
-}
-const playerSeek = document.getElementById('playerSeek');
-const progressTrack = document.getElementById('playerProgressTrack');
-for (const event of ['touchstart', 'touchend', 'pointerdown', 'click']) {
-  progressTrack.addEventListener(event, e => e.stopPropagation());
-}
-playerSeek.addEventListener('input', () => {
-  if (!playbackDuration) return;
-  const time = Number(playerSeek.value) / 1000 * playbackDuration;
-  if (currentPlatform === 'youtube') ytCommand('seekTo', [time, true]);
-  else playerVideo.currentTime = time;
-  updatePlaybackProgress(time, playbackDuration);
 });
 
 const VOLUME_STEP = 10; // percentage points, 0-100 scale (matches YouTube's IFrame API)
@@ -1322,6 +1433,20 @@ function markPlayingVideoWatched() {
   v.watched = true;
   toggleWatched(v.id, true).catch(() => { v.watched = false; });
 }
+function promptPlaybackTags() {
+  if (!currentVideo) return;
+  if (currentPlatform === 'youtube') {
+    ytCommand('pauseVideo');
+    ytPlaying = false;
+  } else {
+    playerVideo.pause();
+  }
+  openSheet();
+}
+playerVideo.addEventListener('ended', () => {
+  if (currentPlatform === 'douyin') promptPlaybackTags();
+});
+
 playerVideo.addEventListener('playing', () => {
   if (currentPlatform === 'douyin') markPlayingVideoWatched();
 });
@@ -1371,13 +1496,10 @@ window.addEventListener('message', (event) => {
   if (!data || !['onReady', 'onStateChange', 'infoDelivery', 'initialDelivery', 'onError', 'onAutoplayBlocked'].includes(data.event)) return;
   clearTimeout(ytFallbackTimer);
   playerYtNotice.textContent = '';
-  if (data.info && typeof data.info === 'object' &&
-      (Number.isFinite(data.info.currentTime) || Number.isFinite(data.info.duration))) {
-    updatePlaybackProgress(data.info.currentTime ?? 0, data.info.duration ?? playbackDuration);
-  }
   if (data.event === 'onAutoplayBlocked') {
     // A phone may require a tap inside the cross-origin player itself.
     // Let YouTube receive that tap instead of intercepting it for gestures.
+    ytPlaying = false;
     playerYtCapture.classList.add('hidden');
     playerYtNotice.textContent = ' · Tap Play in the YouTube player to start.';
   }
@@ -1385,18 +1507,21 @@ window.addEventListener('message', (event) => {
     playerFrame.classList.add('hidden');
     playerYtCapture.classList.add('hidden');
     const code = Number(data.info);
+    const embeddingBlocked = code === 101 || code === 150;
+    playerRefreshBtn.hidden = embeddingBlocked;
     const reasons = {
       2: 'YouTube rejected the video ID.',
       5: 'YouTube could not play this video in this browser.',
       100: 'This video is unavailable or private.',
-      101: 'The owner does not allow this video to play in other apps.',
-      150: 'The owner does not allow this video to play in other apps.',
+      101: 'The owner does not allow this video to play in embedded players.',
+      150: 'The owner does not allow this video to play in embedded players.',
       153: 'YouTube could not verify this embedded player. The browser may be withholding the site referrer.'
     };
-    playerFallbackMsg.textContent = `YouTube error ${Number.isFinite(code) ? code : 'unknown'}: ${reasons[code] || 'YouTube could not play this embed.'} Tap the creator name below to open on YouTube.`;
+    playerFallbackMsg.textContent = `YouTube error ${Number.isFinite(code) ? code : 'unknown'}: ${reasons[code] || 'YouTube could not play this embed.'} Use Open in YouTube to watch there, then return here to rate and tag.`;
     playerFallback.classList.add('show');
   }
   const state = data.event === 'onStateChange' ? data.info : data.info?.playerState;
+  if (state === 0) promptPlaybackTags();
   if (state === 1 || state === 2) ytPlaying = state === 1;
   if (state === 1) {
     playerFrame.classList.remove('hidden');
@@ -1412,7 +1537,7 @@ playerRefreshBtn.addEventListener('click', async () => {
     playerFallback.classList.remove('show');
     playerFrame.classList.remove('hidden');
     playerYtCapture.classList.remove('hidden');
-    playerFrame.src = `https://www.youtube.com/embed/${currentVideo.id}?autoplay=1&playsinline=1&enablejsapi=1&loop=1&playlist=${currentVideo.id}&origin=${encodeURIComponent(location.origin)}`;
+    playerFrame.src = `https://www.youtube.com/embed/${currentVideo.id}?autoplay=1&playsinline=1&controls=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
     armYtFallbackTimer();
     return;
   }
@@ -1420,9 +1545,6 @@ playerRefreshBtn.addEventListener('click', async () => {
 });
 
 function closePlayer() {
-  if (document.fullscreenElement === document.documentElement) {
-    document.exitFullscreen().catch(() => {});
-  }
   playbackGeneration++;
   playerVideos = [];
   currentVideo = null;
@@ -1440,13 +1562,14 @@ function closePlayer() {
 }
 
 playerClose.addEventListener('click', closePlayer);
-document.getElementById('playerFullscreen').addEventListener('click', toggleFullscreen);
+document.getElementById('playerFullscreen').addEventListener('click', toggleVideoFocus);
 // Tapping/clicking the capture layer (see its definition above) is the only
 // way to pause a YouTube video by hand — the iframe itself is cross-origin
 // and never sees the click, and a swipe that crosses SWIPE_THRESHOLD_PX
 // doesn't fire a synthetic click (mobile browsers suppress it on real
 // finger movement), so this only fires for genuine taps, never swipes.
 playerYtCapture.addEventListener('click', togglePause);
+document.getElementById('playerPauseToggle').addEventListener('click', togglePause);
 
 // The creator name links directly to the source video.
 
@@ -1466,7 +1589,7 @@ async function goToVideo(delta) {
   if (idx === -1) return;
   if (delta > 0 && !isRatedAndTagged(currentVideo)) {
     showBadge('Rate & tag to continue ↑');
-    openSheet();
+    promptPlaybackTags();
     return;
   }
   const nextIdx = idx + delta;
@@ -1488,6 +1611,12 @@ playerOverlay.addEventListener('wheel', (e) => {
   e.preventDefault();
   goToVideo(e.deltaY > 0 ? 1 : -1);
 }, { passive: false });
+
+// Reading a long description must not navigate away from the current video.
+const playerDescription = document.getElementById('playerInfoOverlay');
+for (const event of ['wheel', 'touchstart', 'touchend', 'touchcancel']) {
+  playerDescription.addEventListener(event, e => e.stopPropagation(), { passive: true });
+}
 
 const SWIPE_THRESHOLD_PX = 60;
 let touchStartY = null;
@@ -1521,6 +1650,28 @@ playerFrame.addEventListener('load', () => {
   if (currentPlatform === 'youtube') ytCommand('setPlaybackRate', [DEFAULT_PLAYBACK_RATE]);
 });
 
+// Native video controls handle Space internally before it reaches the
+// document's bubble listener. Intercept it here to avoid toggling twice.
+playerVideo.addEventListener('keydown', e => {
+  if (playerSheet.classList.contains('show')) return;
+  if (e.key !== ' ' && e.code !== 'Space') return;
+  e.preventDefault(); e.stopPropagation();
+  if (!e.repeat) togglePause();
+}, {capture: true});
+
+function revealPlaybackControls() {
+  if (!currentVideo) return;
+  if (currentPlatform === 'youtube') {
+    ytCommand('pauseVideo');
+    ytPlaying = false;
+    playerYtCapture.classList.add('hidden');
+  } else {
+    playerVideo.controls = true;
+    playerVideo.pause();
+  }
+  showBadge('Paused · use the video timeline');
+}
+
 function togglePause() {
   if (currentPlatform === 'youtube') {
     // The iframe never has keyboard focus (autoplay starts it without a
@@ -1538,23 +1689,14 @@ function togglePause() {
   else { playerVideo.pause(); showBadge('❚❚'); }
 }
 
-function requestPlayerFullscreen() {
-  if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
-  // Include the sibling rate/tag sheet as well as the media and timeline.
-  // Requests without a user gesture may be denied; retain the viewport player.
-  try {
-    const result = document.documentElement.requestFullscreen();
-    if (result?.catch) result.catch(() => {});
-  } catch { /* Full-viewport playback remains available. */ }
+function toggleVideoFocus() {
+  const expanded = playerOverlay.classList.toggle('video-focus');
+  const button = document.getElementById('playerFullscreen');
+  button.setAttribute('aria-pressed', String(expanded));
+  button.setAttribute('aria-label', expanded ? 'Show video description' : 'Expand video within window');
+  button.title = expanded ? 'Show video description (F)' : 'Expand video within window (F)';
+  requestAnimationFrame(positionPlayerChrome);
 }
-function toggleFullscreen() {
-  if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
-    return;
-  }
-  requestPlayerFullscreen();
-}
-document.addEventListener('fullscreenchange', () => requestAnimationFrame(positionPlayerChrome));
 
 // Grid-level shortcuts (only active while the player is closed): vim-style
 // count prefix + command, e.g. "5" then "m" marks the first 5 visible
@@ -1589,7 +1731,9 @@ function scoreFirstVideo(score) {
   syncStatus.textContent = `Scored "${v.title.slice(0, 30)}…" ${score}★`;
 }
 
-document.addEventListener('keydown', (e) => {
+document.addEventListener('keydown', window.myfollowsKeydown = (e) => {
+  if ((e.key === ' ' || e.code === 'Space') &&
+      (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey)) return;
   if (e.key === 'Escape') {
     // One level at a time: closes the rate/tag sheet first if it's open,
     // so Escape doesn't skip past it straight to closing the whole player.
@@ -1597,13 +1741,43 @@ document.addEventListener('keydown', (e) => {
     closePlayer(); closeSidebar(); closeTools(); return;
   }
 
+  const activeElement = document.activeElement;
+  if (activeElement &&
+      (['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement.tagName) || activeElement.isContentEditable)) return;
+
+  if (playerOverlay.classList.contains('show') && playerSheet.classList.contains('show')) {
+    if (['h', 'j', 'k', 'l'].includes(e.key)) {
+      e.preventDefault(); moveTagCursor(e.key); return;
+    }
+    if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault();
+      if (!e.repeat) {
+        const chip = playerLabels.contains(document.activeElement) && document.activeElement.matches('[data-label]')
+          ? document.activeElement : playerLabels.querySelector('[data-label]');
+        chip?.focus();
+        chip?.click();
+      }
+      return;
+    }
+    if (e.key === 'Enter') { e.preventDefault(); if (!e.repeat) submitPlayerTags(); return; }
+  }
+
   if (playerOverlay.classList.contains('show')) {
-    if (e.key === 'ArrowUp') { e.preventDefault(); nudgeVolume(VOLUME_STEP); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); nudgeVolume(-VOLUME_STEP); }
+    if (e.key >= '1' && e.key <= '5') {
+      e.preventDefault();
+      if (!e.repeat && currentVideo) {
+        currentVideo.interest_score = Number(e.key);
+        queuePlayerSave(currentVideo);
+        renderPlayerMark(currentVideo);
+      }
+    }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); nudgeVolume(VOLUME_STEP); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); if (!e.repeat) goToVideo(1); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); nudgeSeek(SEEK_STEP_SEC); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); nudgeSeek(-SEEK_STEP_SEC); }
-    else if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); togglePause(); }
-    else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleFullscreen(); }
+    else if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); if (!e.repeat) togglePause(); }
+    else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); if (!e.repeat) revealPlaybackControls(); }
+    else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleVideoFocus(); }
     return;
   }
 
@@ -1670,19 +1844,21 @@ function card(v) {
 }
 
 async function setScore(id, score) {
-  await fetch(`/api/videos/${id}/score`, {
+  const response = await fetch(`/api/videos/${id}/score`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ score }),
   });
+  if (!response.ok) throw new Error('Could not save score');
 }
 
 async function setLabels(id, labels) {
-  await fetch(`/api/videos/${id}/labels`, {
+  const response = await fetch(`/api/videos/${id}/labels`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ labels }),
   });
+  if (!response.ok) throw new Error('Could not save tags');
 }
 
 async function setStarred(id, starred) {
@@ -1732,16 +1908,6 @@ playerWatchLaterToggle.addEventListener('click', () => {
   renderPlayerMark(currentVideo);
 });
 
-// Purely a local DB flag (see toggleUnlisted) — no confirm(), unlike
-// playerUnfollowBtn below. toggleUnlisted itself refetches the creator list
-// and the grid, since unlisting changes which videos are visible there.
-playerUnlistBtn.addEventListener('click', async () => {
-  if (!currentVideo) return;
-  currentVideo.unlisted = !currentVideo.unlisted;
-  renderPlayerMark(currentVideo);
-  await toggleUnlisted(currentVideo.platform, currentVideo.user, currentVideo.unlisted);
-});
-
 // Tries the real, hard-to-reverse unfollow/unsubscribe on the live
 // Douyin/YouTube account, then always purges the creator and all their
 // videos from this app regardless of whether that live action could be
@@ -1777,12 +1943,12 @@ playerUnfollowBtn.addEventListener('click', async () => {
     } else {
       syncStatus.textContent = data.error || 'Could not complete this — try again, or do it manually on the site.';
       playerUnfollowBtn.disabled = false;
-      playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe' : 'Unfollow';
+      playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe channel' : 'Unfollow channel';
     }
   } catch (err) {
     syncStatus.textContent = 'Request failed — try again.';
     playerUnfollowBtn.disabled = false;
-    playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe' : 'Unfollow';
+    playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe channel' : 'Unfollow channel';
   }
 });
 
@@ -1926,7 +2092,6 @@ async function loadCreators() {
 }
 
 let currentVideos = [];
-let labelFilterPopulated = false;
 let allLabelCategories = [];
 
 function setRecommendedMode(on) {
@@ -2014,15 +2179,8 @@ async function loadMoreVideos() {
       if (!Array.isArray(data.videos)) throw new Error('Invalid video response');
       const more = !feedRecommended && !!data.has_more;
       if (more && (!data.next_cursor || data.next_cursor === feedCursor)) throw new Error('Invalid video cursor');
-      if (!labelFilterPopulated && data.label_categories) {
-        labelFilterPopulated = true;
-        allLabelCategories = data.label_categories;
-        data.label_categories.forEach(label => {
-          const opt = document.createElement('option');
-          opt.value = label;
-          opt.textContent = label.replace(/_/g, ' ');
-          labelFilter.appendChild(opt);
-        });
+      if (data.label_categories) {
+        rememberLabelCategories(data.label_categories);
       }
       const seen = new Set(currentVideos.map(v => v.id));
       const page = (feedRecommended ? filterBySearch(data.videos) : data.videos).filter(v => {
