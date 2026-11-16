@@ -6,6 +6,7 @@ services:
     network_mode: host
     volumes:
       - ./data:/data
+      - ./logs:/app/logs
       # YouTube login launches a headed Chromium straight onto the host's
       # own X display instead of a virtual display + VNC (see youtube.py) —
       # this mount plus DISPLAY below is what makes that window actually
@@ -20,6 +21,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     environment:
       - DATA_DIR=/data
+      - LOG_DIR=/app/logs
       - TZ=Asia/Shanghai
       - DISPLAY=:0
       # google.com/youtube.com are only reachable through this local proxy

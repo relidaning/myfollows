@@ -6,6 +6,21 @@ changes, especially "How the feed sync actually works" and "YouTube
 subscriptions sync" sections. This file only holds things not obvious from
 README/code.
 
+## Current interface and sync boundaries
+
+- `ui.html` owns the MyFollows home link, full-page settings, creator search,
+  responsive player, seek timeline and SVG action controls. The creator name
+  in playback opens the source video. Settings uses `#settings` routes.
+- `FEED_BATCH_SIZE = 50` controls homepage batches. Keep generation/abort
+  guards for stale responses, stable date/ID cursors and the player's separate
+  queue: marking a video watched can remove its grid card during playback.
+- `POST /api/sync/start` returns immediately. `runtime.SyncCoordinator` owns
+  the background job and deduplicates combined manual/startup/scheduled runs.
+  `/api/sync/status` is lock-free with respect to platform browser operations;
+  detailed results are in Settings → Sync. Legacy platform APIs stay blocking.
+- Offline checks: `python3 -m unittest discover -s tests -v` and
+  `node tests/playback.test.cjs`. Use synthetic fixtures, not saved accounts.
+
 ## Operational hazards
 
 - **Port collision risk from `network_mode: host`.** This container binds
@@ -68,8 +83,9 @@ README/code.
   `/api/play` video stream and the MCP transport. The large list responses
   are compressed per handler instead (`_json_gz` in `server.py`, PR #5,
   merged 2026-10-03; `/api/videos` 722 → 163 KB on the wire).
-  `/api/videos` is unpaginated (~720 KB raw for 670 videos) and re-fetched
-  on every page open and filter change.
+  The homepage now requests `/api/videos?limit=50` and follows opaque
+  `next_cursor` values while scrolling. Search (`q`) runs before pagination;
+  requests without `limit` retain the legacy full-list contract.
 - **`/api/creators` must not count videos with a per-creator subquery.**
   The UI reloads the creator list after every watched toggle
   (`toggleWatched` in `ui.html`), and the handlers run SQLite on the event
@@ -244,26 +260,13 @@ README/code.
   the current video. Used as of 2026-09-18 in `ui.html`'s auto-repeat
   behavior for the playback page (the native Douyin `<video>` element just
   gets the plain `loop` attribute).
-- **YouTube's embed iframe can silently substitute a "Sign in to confirm
-  you're not a bot" interstitial for the real player**, with no client-side
-  signal — it's a cross-origin page, so there's no `error` event to catch.
-  This can't be fixed server-side (it's YouTube's bot detection on the
-  viewer's IP). As of 2026-08-10, `ui.html`'s `armYtFallbackTimer` works
-  around this by arming a 9s timer on every YouTube `openPlayer`/retry call
-  and showing the existing fallback UI (Retry / "Open on YouTube") unless a
-  postMessage arrives from the iframe first — the real player starts
-  broadcasting almost immediately, the interstitial never does. If YouTube
-  changes embed behavior (e.g. delays the first postMessage past 9s even on
-  success), this heuristic will need retuning. Confirmed 2026-09-15: for one
-  user this fired on nearly every video, tracked down (via asking whether
-  they use a VPN/proxy) to a **full-tunnel VPN's exit IP** being flagged by
-  YouTube's embed-only bot detection — the same IP loads `youtube.com`
-  directly in a browser tab fine, because that stricter check applies only
-  to anonymous iframe embeds. A client-side silent-auto-retry-before-fallback
-  was tried and reverted (`ui.html`, briefly added and rolled back same
-  session) since a flagged VPN exit IP fails identically on every retry;
-  there is no code fix on our side for the VPN case, only split-tunneling
-  `youtube.com` out of the VPN on the client.
+- **YouTube iframe silence cannot establish a playback failure.** The user
+  reported playback working initially before the old nine-second watchdog
+  replaced it with a bot-blocking message. `armYtFallbackTimer` now shows only
+  a small source-link hint and never hides/reloads media. Keep the iframe
+  visible even if no postMessages arrive; only explicit player errors may
+  activate the fallback. Validate with `node tests/playback.test.cjs`, which
+  simulates silence, stale timers, unrelated frames and explicit errors.
 - **The gated swipe/scroll navigation on the playback page (`ui.html`,
   added 2026-08-09) can silently fail on real phones in two distinct ways
   that don't reproduce in a desktop browser or simulated-touch testing —

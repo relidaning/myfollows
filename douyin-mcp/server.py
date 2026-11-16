@@ -18,6 +18,8 @@ tab and update the relevant constant or `_parse_feed_response` below.
 """
 
 import asyncio
+import base64
+import binascii
 import datetime
 import gzip
 import json
@@ -37,6 +39,7 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 
 import common
 import youtube
+import runtime
 from common import LABEL_CATEGORIES, QR_IMAGE_PATH, _VIDEO_COLUMNS, _classify_labels, _db
 
 logging.basicConfig(
@@ -45,6 +48,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
     force=True,
 )
+logging.getLogger().addHandler(runtime.DailyHandler())
 _log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -56,7 +60,7 @@ UI_HTML_PATH = os.path.join(os.path.dirname(__file__), "ui.html")
 
 # Daily sync hour, in the container's local time (TZ=Asia/Shanghai in
 # docker-compose.yml) — see _scheduled_sync_loop.
-SYNC_HOUR = int(os.environ.get("SYNC_HOUR", "6"))
+SYNC_HOUR = runtime.SYNC_HOUR
 
 DOUYIN_HOME = "https://www.douyin.com/"
 FOLLOW_FEED_URL = "https://www.douyin.com/follow"
@@ -481,7 +485,10 @@ async def _run_sync(limit: int) -> dict:
                 stopped_early = "creator scrape failed"
 
             if not items:
+                # Creator inventory is valuable even when the video feed is empty.
+                common.upsert_creators(creators, platform="douyin")
                 return {
+                    "creators": len(creators),
                     "error": "No feed items found. Douyin's follow-feed API "
                     "(/aweme/v1/web/follow/feed/) may have changed shape — "
                     "inspect a live response and update _parse_feed_response in server.py.",
@@ -847,6 +854,26 @@ async def ui_index(request: Request) -> Response:
     return Response(body, media_type="text/html; charset=utf-8", headers=headers)
 
 
+@mcp.custom_route("/api/sync/status", methods=["GET"])
+async def api_sync_status(request: Request) -> Response:
+    return JSONResponse({'platforms': runtime.sync_snapshot(),
+                         'job': runtime.sync_jobs.snapshot(),
+                         'interval_minutes': runtime.SYNC_INTERVAL // 60})
+
+
+@mcp.custom_route("/api/sync/start", methods=["POST"])
+async def api_sync_start(request: Request) -> Response:
+    try:
+        limit = int(request.query_params.get("limit", str(runtime.SYNC_LIMIT)))
+        if not 1 <= limit <= 500:
+            raise ValueError()
+    except ValueError:
+        return JSONResponse({'error': 'limit must be an integer between 1 and 500'}, status_code=400)
+    started = runtime.sync_jobs.start(lambda: _perform_sync("Manual", limit), source='manual')
+    return JSONResponse({'status': 'started' if started else 'already_running',
+                         'job': runtime.sync_jobs.snapshot()}, status_code=202 if started else 200)
+
+
 @mcp.custom_route("/api/status", methods=["GET"])
 async def api_status(request: Request) -> Response:
     return JSONResponse(await _login_poll_impl())
@@ -930,6 +957,23 @@ def _json_gz(request: Request, data: dict) -> Response:
 
 @mcp.custom_route("/api/videos", methods=["GET"])
 async def api_videos(request: Request) -> Response:
+    page_limit = request.query_params.get('limit')
+    cursor = request.query_params.get('cursor')
+    search = request.query_params.get('q', '').strip().casefold()
+    position = None
+    try:
+        if page_limit is not None:
+            page_limit = int(page_limit)
+            if not 1 <= page_limit <= 200:
+                raise ValueError()
+        if cursor:
+            if page_limit is None or len(cursor) > 2048:
+                raise ValueError()
+            position = json.loads(base64.urlsafe_b64decode(cursor + '=' * (-len(cursor) % 4)))
+            if not isinstance(position, list) or len(position) != 2 or not all(isinstance(v, str) for v in position):
+                raise ValueError()
+    except (ValueError, TypeError, binascii.Error, UnicodeDecodeError):
+        return JSONResponse({'error': 'Invalid pagination: limit must be 1–200 and cursor must come from the previous page.'}, status_code=400)
     watched_param = request.query_params.get("watched")
     show_filtered = request.query_params.get("show_filtered") == "true"
     user_param = request.query_params.get("user")
@@ -971,12 +1015,25 @@ async def api_videos(request: Request) -> Response:
         # of a different label name.
         conditions.append("(',' || v.labels || ',') LIKE ?")
         params.append(f"%,{label_param},%")
+    if search:
+        conditions.append('(INSTR(CASEFOLD(v.title), ?) > 0 OR INSTR(CASEFOLD(v.user), ?) > 0)')
+        params.extend([search, search])
+    if position:
+        conditions.append("(COALESCE(v.published_at, ''), v.id) < (?, ?)")
+        params.extend(position)
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY v.published_at DESC"
+    query += " ORDER BY COALESCE(v.published_at, '') DESC, v.id DESC"
+    if page_limit is not None:
+        query += ' LIMIT ?'
+        params.append(page_limit + 1)
 
     conn = _db()
+    conn.create_function('CASEFOLD', 1, lambda value: (value or '').casefold(), deterministic=True)
     rows = conn.execute(query, params).fetchall()
+    has_more = page_limit is not None and len(rows) > page_limit
+    if page_limit is not None:
+        rows = rows[:page_limit]
     users = [r[0] for r in conn.execute("SELECT DISTINCT user FROM videos ORDER BY user").fetchall()]
     label_groups = [
         r[0] for r in conn.execute(
@@ -1004,7 +1061,14 @@ async def api_videos(request: Request) -> Response:
         if label not in LABEL_CATEGORIES
     })
     label_categories = list(LABEL_CATEGORIES.keys()) + custom_labels
-    return _json_gz(request, {"videos": videos, "users": users, "label_categories": label_categories})
+    payload = {"videos": videos, "users": users, "label_categories": label_categories}
+    if page_limit is not None:
+        next_cursor = None
+        if has_more and videos:
+            last = videos[-1]
+            next_cursor = base64.urlsafe_b64encode(json.dumps([last['published_at'] or '', last['id']]).encode()).decode().rstrip('=')
+        payload.update(has_more=has_more, next_cursor=next_cursor)
+    return _json_gz(request, payload)
 
 
 @mcp.custom_route("/api/videos/recommended", methods=["GET"])
@@ -1331,22 +1395,46 @@ async def api_play(request: Request) -> Response:
     )
 
 
-_BASE_URL = "http://127.0.0.1:8082"
+_BASE_URL = f"http://127.0.0.1:{runtime.PORT}"
 
 
 def _sync_both_platforms(label_prefix: str) -> None:
-    """POST /api/sync then /api/youtube/sync over loopback, logging results.
+    runtime.sync_jobs.run(lambda: _perform_sync(label_prefix, runtime.SYNC_LIMIT),
+                          source=label_prefix.lower())
 
-    Shared by the startup sync and the daily scheduled sync so both get the
+
+def _perform_sync(label_prefix: str, limit: int) -> None:
+    """POST both platform sync endpoints over loopback, recording outcomes.
+
+    Shared by manual, startup and scheduled background syncs so all get the
     same locking and not-logged-in handling the REST endpoints already have.
     """
     with httpx.Client(timeout=300.0) as client:
         for label, path in (("Douyin", "/api/sync"), ("YouTube", "/api/youtube/sync")):
             try:
-                resp = client.post(f"{_BASE_URL}{path}")
-                _log.info("%s %s sync result: %s", label_prefix, label, resp.json())
+                started = time.monotonic()
+                platform = label.lower()
+                runtime.sync_update(platform, running=True, queued=False,
+                    started_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), error='')
+                resp = client.post(f"{_BASE_URL}{path}?limit={limit}")
+                resp.raise_for_status()
+                result = resp.json()
+                runtime.sync_update(platform, running=False,
+                    completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    ok=not bool(result.get('error') or result.get('stopped_early')),
+                    fetched=result.get('fetched', 0), new=result.get('new', 0),
+                    total_in_db=result.get('total_in_db'),
+                    error=result.get('error') or result.get('stopped_early') or '')
+                _log.info('sync_operation %s', json.dumps({
+                    'platform': platform, 'source': label_prefix.lower(), 'ok': not bool(result.get('error') or result.get('stopped_early')),
+                    'duration_seconds': round(time.monotonic() - started, 3),
+                    'fetched': result.get('fetched', 0)}))
             except Exception:
-                _log.exception("%s %s sync failed", label_prefix, label)
+                runtime.sync_update(label.lower(), running=False, ok=False, new=None, fetched=None, total_in_db=None,
+                    completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    error='Sync request failed; check connectivity and login.')
+                _log.info('sync_operation %s', json.dumps({'platform': label.lower(), 'source': label_prefix.lower(),
+                    'ok': False, 'duration_seconds': round(time.monotonic() - started, 3), 'fetched': 0}))
 
 
 def _wait_for_server(timeout: float = 60.0) -> bool:
@@ -1359,7 +1447,7 @@ def _wait_for_server(timeout: float = 60.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            httpx.get(f"{_BASE_URL}/api/videos", timeout=2.0)
+            httpx.get(f"{_BASE_URL}/api/videos?limit=1", timeout=2.0)
             return True
         except Exception:
             time.sleep(1.0)
@@ -1405,7 +1493,7 @@ def _sleep_until(target: datetime.datetime) -> None:
 
 
 def _scheduled_sync_loop() -> None:
-    """Hit our own /api/sync and /api/youtube/sync once a day at SYNC_HOUR.
+    """Sync periodically and at the daily SYNC_HOUR slot.
 
     Runs in a plain background thread (not an asyncio task) so it doesn't
     need to hook into FastMCP's own event-loop startup — it just sleeps and
@@ -1417,9 +1505,7 @@ def _scheduled_sync_loop() -> None:
     _startup_sync_once()
     while True:
         now = datetime.datetime.now()
-        next_run = now.replace(hour=SYNC_HOUR, minute=0, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += datetime.timedelta(days=1)
+        next_run = runtime.next_sync_time(now)
         _sleep_until(next_run)
 
         late = (datetime.datetime.now() - next_run).total_seconds()
@@ -1435,5 +1521,6 @@ def _scheduled_sync_loop() -> None:
 
 
 if __name__ == "__main__":
+    _log.info("Application started")
     threading.Thread(target=_scheduled_sync_loop, daemon=True).start()
-    mcp.run(transport="http", host="0.0.0.0", port=8082)
+    mcp.run(transport="http", host="0.0.0.0", port=runtime.PORT)

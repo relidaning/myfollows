@@ -34,6 +34,7 @@ import os
 import re
 from typing import Optional
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -368,6 +369,36 @@ async def _scrape_subscriptions(page, max_videos: int) -> list[dict]:
     return videos
 
 
+async def _scrape_following(page) -> list[dict]:
+    """Read subscribed channels independently of recent uploads; bounded scrolling.
+
+    This is an additive inventory. Never infer an unsubscribe from a partial DOM.
+    """
+    await page.goto('https://www.youtube.com/feed/channels', wait_until='domcontentloaded', timeout=30000)
+    selector = 'ytd-channel-renderer'
+    await page.wait_for_selector(selector, timeout=15000)
+    creators = {}
+    stalled = 0
+    for _ in range(MAX_SCROLLS):
+        before = len(creators)
+        for card in await page.locator(selector).all():
+            name_el = card.locator('#channel-title').first
+            if not await name_el.count():
+                continue
+            name = (await name_el.inner_text()).strip()
+            if not name:
+                continue
+            image = card.locator('img').first
+            avatar = await image.get_attribute('src') if await image.count() else ''
+            creators[name] = {'name': name, 'avatar_url': avatar or '', 'unread_count': 0}
+        stalled = stalled + 1 if len(creators) == before else 0
+        if stalled >= SCROLL_STALL_LIMIT:
+            break
+        await page.evaluate('window.scrollTo(0, document.documentElement.scrollHeight)')
+        await page.wait_for_timeout(SCROLL_WAIT_MS)
+    return list(creators.values())
+
+
 async def sync(limit: int = 30) -> dict:
     if not os.path.exists(common.YOUTUBE_STORAGE_STATE_PATH):
         return {"error": "Not logged in."}
@@ -383,20 +414,25 @@ async def sync(limit: int = 30) -> dict:
                 logged_in = await page.locator(LOGGED_IN_SELECTOR).count() > 0
                 if not logged_in:
                     return {"error": "Session looks logged out — log in again."}
-                return {
-                    "error": "No subscription videos found. YouTube's subscriptions-feed "
-                    "DOM may have changed — inspect the page with devtools and update "
-                    "VIDEO_CARD_SELECTOR / _scrape_subscriptions in youtube.py.",
-                }
+                # A logged-in account may have no recent uploads. Still collect
+                # its channel inventory instead of failing before that pass.
+                _log.warning('No recent subscription video cards; attempting channel inventory')
 
             target = max(limit, 1) * 3
             await _scroll_load_more(page, target)
             videos = await _scrape_subscriptions(page, target)
+            following = []
+            following_error = ''
+            try:
+                following = await _scrape_following(page)
+            except PlaywrightError:
+                following_error = 'YouTube channel list unavailable; recent-video creators saved.'
+                _log.warning(following_error)
         finally:
             await page.close()
 
-    creators = []
-    seen = set()
+    creators = list(following)
+    seen = {creator["name"] for creator in creators}
     for v in videos:
         if v["user"] and v["user"] not in seen:
             seen.add(v["user"])
@@ -409,6 +445,7 @@ async def sync(limit: int = 30) -> dict:
         "new": new_count,
         "total_in_db": total,
         "creators": len(creators),
+        **({"stopped_early": following_error} if following_error else {}),
     }
 
 

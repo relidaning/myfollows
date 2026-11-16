@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # the pinned playwright pip version drifts from the image's browser build.
 RUN playwright install chromium --with-deps
 
-COPY server.py common.py youtube.py ui.html .
+COPY server.py common.py youtube.py runtime.py settings.ini ui.html .
 
 EXPOSE 8082
 

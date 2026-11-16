@@ -2,21 +2,21 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0b0d">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Follows">
-<title>Follows</title>
+<meta name="apple-mobile-web-app-title" content="MyFollows">
+<title>MyFollows</title>
 <style>
   :root {
-    --bg: #0b0b0d;
-    --panel: #16161a;
-    --line: #25252b;
-    --text: #ece9e2;
-    --text-dim: #8c8a92;
-    --cyan: #25f4ee;
-    --coral: #fe2c55;
+    --bg: #10141c;
+    --panel: #191f2b;
+    --line: #2b3444;
+    --text: #e7edf7;
+    --text-dim: #a1adbf;
+    --cyan: #91baff;
+    --coral: #f49aaa;
     --radius: 10px;
   }
   * { box-sizing: border-box; }
@@ -52,6 +52,7 @@
     flex-wrap: wrap;
   }
   .brand {
+    color: inherit; text-decoration: none;
     display: flex; align-items: baseline; gap: 8px;
     font-weight: 700; font-size: 17px; letter-spacing: -0.01em;
     margin-right: auto;
@@ -96,39 +97,12 @@
   #searchBox:focus { border-color: var(--cyan); }
   #searchBox::-webkit-search-cancel-button { cursor: pointer; }
 
-  /* Secondary filters (platform/label, show filtered/unlisted, fix old
-     links) live in this dropdown, opened via #toolsToggle — kept out of
-     the always-visible header row on every screen size, not just mobile. */
-  #headerControls {
-    display: none;
-    position: absolute; top: 100%; right: 14px; margin-top: 8px;
-    width: 280px;
-    flex-direction: column; align-items: stretch; gap: 10px;
-    padding: 14px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-    max-height: min(70vh, 520px); overflow-y: auto; overscroll-behavior: contain;
-    box-shadow: 0 16px 40px rgba(0,0,0,0.55);
-    z-index: 30;
-  }
-  #headerControls.open { display: flex; }
-  #headerControls select, #headerControls > button, #headerControls label.check {
-    width: 100%;
-  }
-  #headerControls > button { text-align: left; }
+  #headerControls { display: none; }
   #toolsToggle { display: inline-flex; }
 
   .layout { display: flex; align-items: flex-start; max-width: 1600px; margin: 0 auto; }
 
   /* Creator sidebar */
-  aside#sidebar {
-    width: 240px; flex-shrink: 0;
-    position: sticky; top: 61px;
-    height: calc(100vh - 61px);
-    overflow-y: auto;
-    overscroll-behavior: contain; /* stop an over-scroll at the top/bottom of the creator list from chaining into the grid page behind it */
-    padding: 14px 10px;
-    border-right: 1px solid var(--line);
-  }
   aside#sidebar h3 {
     font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--text-dim); margin: 4px 10px 8px;
@@ -177,7 +151,7 @@
     overflow: hidden;
     display: flex; flex-direction: column;
     transition: border-color 0.15s ease, transform 0.2s ease, opacity 0.2s ease;
-    /* The grid renders every matching video at once (unpaginated, 670+) —
+    /* Keep off-screen cards cheap after more batches have been appended —
        let the browser skip layout/paint for cards that are off-screen.
        The intrinsic size is only a placeholder until a card has been
        rendered once ("auto" then remembers its real size). */
@@ -431,20 +405,23 @@
      redesign. A gradient scrim keeps light text readable over bright video
      frames. Font sizes use clamp() with a vw component so they scale with
      the viewport itself (not a fixed px size), matching TikTok's fluid
-     caption text. right:76px keeps the text from running under #playerRail. */
+     caption text. Equal side gutters keep the text centered on the viewport
+     while leaving room for #playerRail. */
   #playerInfoOverlay {
-    position: absolute; left: 0; right: 76px; bottom: 0; z-index: 6;
-    max-width: 640px;
-    padding: 32px 10px max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+    padding: 32px max(76px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(76px, env(safe-area-inset-left));
+    text-align: center; align-items: center;
+    overflow-wrap: anywhere;
     background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.45) 65%, transparent);
     display: flex; flex-direction: column; gap: 4px;
   }
+  #playerTitleRow, #playerLink, #playerChannelRow { width: 100%; max-width: 640px; }
   #playerTitleRow .title {
     font-size: clamp(15px, 4.2vw, 20px); font-weight: 700; -webkit-line-clamp: 3; min-height: 0;
     color: #fff;
   }
   #playerChannelRow {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap;
     font-size: clamp(12px, 3.2vw, 14px); color: rgba(255,255,255,0.85);
     cursor: pointer;
   }
@@ -507,7 +484,7 @@
 
   #playerCard iframe {
     display: block; border: 0; background: #000;
-    width: min(100vw, 960px); height: auto; aspect-ratio: 16 / 9;
+    width: min(100vw, calc((100dvh - 56px - env(safe-area-inset-bottom)) * 16 / 9)); height: auto; aspect-ratio: 16 / 9;
     max-width: 100vw; max-height: 100dvh;
     min-height: 0; /* same shrink-to-make-room fix as #playerCard video */
   }
@@ -542,7 +519,6 @@
     align-items: center; justify-content: center;
     font-size: 17px; line-height: 1;
   }
-  #sidebarBackdrop { display: none; }
   .sidebar-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 6px 8px; }
   .sidebar-head h3 { margin: 0; }
 
@@ -558,30 +534,6 @@
        fixed 280px anchored under the gear button. */
     #headerControls { left: 14px; width: auto; }
 
-    /* Off-canvas creator drawer, opened by #sidebarToggle. Covers the
-       header area itself (z-index above it) with its own head row
-       (name + close), rather than trying to squeeze a 240px sidebar into
-       a ~375px phone viewport. */
-    .layout { display: block; }
-    aside#sidebar {
-      position: fixed; top: 0; left: 0; z-index: 46;
-      width: min(82vw, 300px);
-      height: 100vh; height: 100dvh;
-      background: var(--bg);
-      transform: translateX(-100%);
-      transition: transform 0.22s ease;
-      box-shadow: 12px 0 32px rgba(0,0,0,0.5);
-      /* Same status-bar clearance as header — this drawer covers the header
-         area (see comment above), so it needs its own top inset too. */
-      padding-top: env(safe-area-inset-top);
-    }
-    body.sidebar-open aside#sidebar { transform: translateX(0); }
-    #sidebarBackdrop {
-      display: none; position: fixed; inset: 0; z-index: 44;
-      background: rgba(0,0,0,0.55);
-    }
-    body.sidebar-open #sidebarBackdrop { display: block; }
-
     main { padding: 14px; }
     #grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
 
@@ -596,22 +548,191 @@
     #playerSheet .score-stars .star { font-size: 28px; }
   }
 
+  /* MyFollows: quiet feed chrome; media carries the visual emphasis. */
+  html, body { font-family: "Avenir Next", "Segoe UI", "PingFang SC", sans-serif; }
+  header { gap: 12px; background: rgba(16,20,28,.94); padding-bottom: 12px; }
+  .brand { align-items: center; gap: 9px; font-size: 19px; letter-spacing: -.6px; }
+  .brand-icon { width: 32px; height: 32px; color: var(--cyan); flex-shrink: 0; }
+  .brand small { letter-spacing: 0; font-size: 11px; }
+  select, button, #searchBox { background: var(--panel); border-color: var(--line); }
+  button, select { min-height: 38px; }
+  button.primary { background: var(--cyan); border-color: var(--cyan); color: #10141c; }
+  button.primary:hover { background: #b3d0ff; }
+  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+  #searchBox { min-height: 38px; max-width: 300px; width: 25vw; border-radius: 20px; }
+  #headerControls { width: 300px; padding: 18px; border-radius: 16px; gap: 12px; }
+  #headerControls h3 { font-size: 14px; margin: 0 0 2px; font-weight: 600; }
+  #headerControls label.check { min-height: 34px; justify-content: space-between; flex-direction: row-reverse; color: var(--text); }
+  label.check input { width: 17px; height: 17px; accent-color: var(--cyan); }
+  #toolsToggle[aria-expanded="true"] { color: var(--cyan); border-color: var(--cyan); }
+  aside#sidebar { width: 220px; padding-top: 20px; }
+  aside#sidebar h3 { text-transform: none; letter-spacing: 0; font-size: 12px; }
+  .creator-row { padding: 10px; }
+  .creator-row:hover, .creator-row.active { background: var(--panel); }
+  .creator-row .cbadge { color: var(--cyan); }
+  main { padding: 24px; }
+  #grid { gap: 22px 18px; }
+  .card { background: transparent; border-color: transparent; border-radius: 12px; }
+  .card:hover { transform: none; border-color: var(--line); }
+  .thumb-btn { border-radius: 12px; overflow: hidden; }
+  .meta { padding: 10px 6px 12px; gap: 8px; }
+  .title { font-size: 13px; line-height: 1.5; font-weight: 500; }
+  .date { color: var(--text-dim); }
+  #playerClose { width: 40px; height: 40px; font-size: 17px; background: rgba(16,20,28,.65); color: #d4dce9; }
+  #playerRail { right: var(--media-right, 16px); top: var(--rail-center, 54%); bottom: auto; transform: translateY(-50%); gap: 12px; }
+  .rail-btn { background: rgba(23,29,40,.75); border-color: rgba(255,255,255,.16); }
+  #playerInfoOverlay {
+    left: var(--media-left, 0px); right: var(--media-inset, 0px);
+    bottom: var(--media-bottom, 0px); padding: 30px 72px max(18px, env(safe-area-inset-bottom)) 20px;
+    text-align: left; align-items: flex-start; gap: 5px;
+    background: linear-gradient(transparent, rgba(0,0,0,.58));
+  }
+  #playerTitleRow .title { font-size: 13px; line-height: 1.5; font-weight: 400; color: #d8dee8; -webkit-line-clamp: 2; }
+  #playerChannelRow { justify-content: flex-start; font-size: 12px; color: #b5bfce; }
+  #playerLink { font-size: 11px; }
+  #playerLink a { color: #b5bfce; text-underline-offset: 3px; }
+  @media (max-width: 860px) {
+    header { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto 44px; gap: 8px; padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+    .brand { font-size: 17px; gap: 5px; margin: 0; min-width: 0; }
+    .brand-icon { width: 27px; height: 27px; }
+    .brand { grid-column: 2; grid-row: 1; }
+    #syncBtn { grid-column: 3; grid-row: 1; }
+    #toolsToggle { grid-column: 4; grid-row: 1; }
+    header .icon-btn, #syncBtn { min-width: 44px; min-height: 44px; }
+    #searchBox { grid-column: 1 / -1; grid-row: 2; min-width: 0; width: 100%; max-width: none; min-height: 44px; font-size: 16px; }
+    #syncStatus { grid-column: 1 / -1; grid-row: 3; text-align: left; white-space: normal; }
+    #syncStatus:empty { display: none; }
+    #headerControls { max-height: min(65dvh, 540px); right: 12px; left: 12px; }
+    #headerControls button, #headerControls select, #headerControls label.check { min-height: 44px; }
+    .watch-toggle { min-height: 44px; }
+    .creator-row { min-height: 48px; }
+    .creator-row .cunlist { opacity: 1; min-height: 36px; }
+    #playerClose { width: 44px; height: 44px; }
+    #playerSheet { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+
+    .brand small { display: none; }
+    #recommendedBtn { font-size: 12px; padding: 7px 9px; }
+    #searchBox { width: 100%; }
+    #headerControls { width: auto; }
+    aside#sidebar { width: min(82vw, 300px); }
+    main { padding: 16px 12px; }
+    #grid { gap: 16px 10px; }
+    #syncStatus { flex-basis: 100%; font-size: 11px; }
+  }
+  @media (max-height: 500px) and (orientation: landscape) {
+    #playerRail { top: var(--rail-center, 54%); bottom: auto; transform: translateY(-50%); gap: 8px; }
+    #playerInfoOverlay { padding-top: 16px; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+    #playerTitleRow .title { -webkit-line-clamp: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+
+  /* Reserve a real footer below the media, including on portrait phones. */
+  #playerMediaWrap { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
+  #playerCard video { max-height: calc(100dvh - 56px - env(safe-area-inset-bottom)); }
+  #playerCard iframe { max-height: calc(100dvh - 56px - env(safe-area-inset-bottom)); max-width: min(100vw, calc((100dvh - 56px - env(safe-area-inset-bottom)) * 16 / 9)); }
+  #playerProgressTrack {
+    top: var(--media-end, calc(100% - 56px)); bottom: auto;
+    left: var(--media-left, 0px); right: var(--media-inset, 0px);
+    height: 48px; padding: 0 12px; display: flex; align-items: center; gap: 10px;
+    background: #000; color: #a1adbf; font-size: 11px; font-variant-numeric: tabular-nums;
+    touch-action: none;
+  }
+  .seek-track { position: relative; flex: 1; height: 4px; border-radius: 2px; background: #394252; }
+  #playerProgressFill { border-radius: 2px; pointer-events: none; }
+  #playerSeek { position: absolute; inset: -20px 0; width: 100%; height: 44px; margin: 0; opacity: 0; cursor: pointer; touch-action: none; }
+  .seek-track:focus-within { outline: 2px solid var(--cyan); outline-offset: 5px; }
+
+  #playerFullscreen {
+    position: absolute; top: max(12px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left));
+    width: 44px; height: 44px; z-index: 9; padding: 0; border: 0;
+    background: rgba(16,20,28,.65); color: #d4dce9; font-size: 24px; border-radius: 50%;
+  }
+  /* Settings is a page with ordinary document scrolling, never a floating panel. */
+  .layout { max-width: 1600px; }
+  body.settings-open .layout { display: none; }
+  #headerControls {
+    position: static; width: auto; max-width: 1100px; max-height: none; margin: 0 auto;
+    padding: 32px 24px 64px; border: none; border-radius: 0; background: transparent;
+    box-shadow: none; overflow: visible; gap: 0;
+  }
+  #headerControls.open { display: block; }
+  .settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+  .settings-heading h1 { font-size: 28px; letter-spacing: -.7px; margin: 0; font-weight: 600; }
+  .settings-heading p, .settings-section > p { color: var(--text-dim); font-size: 13px; line-height: 1.6; margin: 8px 0 20px; }
+  .settings-nav { display: flex; gap: 24px; padding: 14px 0; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+  .settings-nav a { color: var(--text-dim); text-decoration: none; font-size: 13px; padding: 8px 0; }
+  .settings-nav a:hover { color: var(--cyan); }
+  .settings-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 40px; }
+  .settings-column { display: flex; flex-direction: column; gap: 36px; }
+  .settings-section { scroll-margin-top: 130px; min-width: 0; }
+  .settings-section h2 { font-size: 17px; font-weight: 600; margin: 0; }
+  #headerControls .settings-section > select, #headerControls .settings-section > button { display: block; width: 100%; margin: 10px 0; min-height: 44px; text-align: left; }
+  #headerControls label.check { padding: 12px 0; min-height: 48px; border-bottom: 1px solid var(--line); }
+  #headerControls aside#sidebar {
+    display: block; position: static; width: 100%; height: auto; overflow: visible; padding: 0;
+    border: none; transform: none; box-shadow: none; background: transparent;
+  }
+  #headerControls .creator-row { min-height: 48px; }
+  #headerControls .creator-row .cunlist { opacity: 1; min-height: 36px; }
+  #settingsTitle:focus { outline: none; }
+  @media (max-width: 860px) {
+    header { grid-template-columns: minmax(0, 1fr) auto 44px; }
+    .brand { grid-column: 1; }
+    #syncBtn { grid-column: 2; }
+    #toolsToggle { grid-column: 3; }
+    #headerControls { padding: 24px 16px 48px; max-height: none; }
+    .settings-heading { align-items: flex-start; gap: 12px; }
+    .settings-heading h1 { font-size: 24px; }
+    #settingsBack { min-height: 44px; font-size: 12px; white-space: nowrap; }
+    .settings-columns { grid-template-columns: minmax(0, 1fr); gap: 36px; }
+    .settings-nav { gap: 18px; overflow-x: auto; }
+    .settings-nav a { white-space: nowrap; min-height: 44px; }
+  }
+
+  #creatorSearch { width: 100%; min-height: 44px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; font-size: 16px; }
+  #creatorSearchStatus { color: var(--text-dim); font-size: 12px; margin: 10px 0; }
+  #creatorList > button.creator-row { width: 100%; background: transparent; border: 0; text-align: left; }
+  #creatorList .creator-select { padding: 0; min-height: 44px; border: 0; background: transparent; text-align: left; font: inherit; color: inherit; }
+  #settings-sync p { color: var(--text-dim); font-size: 13px; line-height: 1.6; white-space: normal; text-align: left; }
+  #syncPlatformStatus p { padding: 12px 0; margin: 0; border-bottom: 1px solid var(--line); }
+  #feedSentinel { padding: 20px 0; text-align: center; }
+  #feedStatus { color: var(--text-dim); font-size: 13px; }
+  #feedMoreBtn { min-height: 44px; }
+  #playerLink { display: contents; }
+  #playerYtNotice:empty { display: none; }
+  #playerSourceLink { color: inherit; text-decoration: none; text-underline-offset: 3px; }
+  #playerSourceLink:hover { color: var(--cyan); text-decoration: underline; }
+  #playerChannelRow { cursor: default; }
+  .rail-btn { width: 46px; height: 46px; border-radius: 15px; color: #dbe5f5; background: rgba(28,36,49,.68); border: 1px solid rgba(255,255,255,.13); backdrop-filter: blur(12px); box-shadow: 0 3px 12px rgba(0,0,0,.12); }
+  .rail-btn svg { width: 23px; height: 23px; pointer-events: none; }
+  .rail-btn:hover { background: rgba(49,62,82,.85); border-color: rgba(255,255,255,.3); }
+  #playerStarToggle.active, #playerWatchLaterToggle.active { background: rgba(145,186,255,.2); border-color: rgba(145,186,255,.5); color: #b5d1ff; }
+  #playerStarToggle.active svg { fill: currentColor; }
 </style>
 </head>
 <body>
 
 <header>
-  <button id="sidebarToggle" class="icon-btn" aria-label="Creators">👥</button>
-  <div class="brand"><span class="dot"></span>Follows<small id="countLabel"></small></div>
-  <input type="search" id="searchBox" placeholder="Search channels & videos…">
-  <span id="syncStatus"></span>
+  <a class="brand" href="/" aria-label="MyFollows home"><svg class="brand-icon" viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="3" y="6" width="21" height="23" rx="7" fill="currentColor" opacity=".18"/><rect x="8" y="3" width="21" height="23" rx="7" stroke="currentColor" stroke-width="2"/><path d="m16 10 7 4.5-7 4.5z" fill="currentColor"/></svg><span>MyFollows</span><small id="countLabel"></small></a>
+  <input type="search" id="searchBox" aria-label="Search channels and videos" placeholder="Search channels & videos…">
+  <button class="primary" id="syncBtn">Sync</button>
+
+  <button id="toolsToggle" class="icon-btn" aria-label="Settings" aria-expanded="false" aria-controls="headerControls" title="Feed settings">⚙</button>
+</header>
+
+<section id="headerControls" aria-labelledby="settingsTitle">
+  <div class="settings-heading"><div><h1 id="settingsTitle" tabindex="-1">Settings</h1><p>Shape your feed and manage who you follow.</p></div><button id="settingsBack">Back to feed</button></div>
+  <nav class="settings-nav" aria-label="Settings sections"><a href="#settings-feed">Feed</a><a href="#settings-creators">Channels &amp; creators</a><a href="#settings-sync">Sync</a><a href="#settings-account">Accounts</a></nav>
+  <div class="settings-columns">
+    <div class="settings-column">
+      <section class="settings-section" id="settings-feed"><h2>Feed preferences</h2><p>Choose which videos appear in your feed.</p>
+
+  <button id="recommendedBtn" title="Rank unwatched videos by score/star/watch-later/label affinity and show only the top 40 — for when the feed feels overwhelming">Recommended</button>
   <label class="check"><input type="checkbox" id="unwatchedOnly" checked> Unwatched only</label>
   <label class="check"><input type="checkbox" id="starredOnly"> Starred only</label>
   <label class="check"><input type="checkbox" id="watchLaterOnly"> Watch later only</label>
-  <button id="recommendedBtn" title="Rank unwatched videos by score/star/watch-later/label affinity and show only the top 40 — for when the feed feels overwhelming">🎯 Recommended</button>
-  <button class="primary" id="syncBtn">Sync</button>
-  <button id="reloginBtn">Relogin</button>
-  <div id="headerControls">
     <select id="platformFilter">
       <option value="">All platforms</option>
       <option value="douyin">Douyin</option>
@@ -622,21 +743,34 @@
     </select>
     <label class="check"><input type="checkbox" id="showFiltered"> Show filtered (gym/drawing)</label>
     <label class="check"><input type="checkbox" id="showUnlisted"> Show unlisted</label>
+
+      </section>
+      <section class="settings-section" id="settings-sync"><h2>Sync</h2>
+        <p>Sync adds recent videos from the creators you follow. It runs in the background while you browse.</p>
+        <p id="syncStatus" role="status" aria-live="polite"></p>
+        <div id="syncPlatformStatus" aria-live="polite"></div>
+        <p id="syncLibraryTotal"></p>
+      </section>
+      <section class="settings-section" id="settings-account"><h2>Accounts &amp; maintenance</h2><p>Manage platform access and refresh old video links.</p>
+    <button id="reloginBtn">Manage login</button>
     <button id="backfillBtn" title="Fetch playable links for videos synced before in-page playback existed">Fix old links</button>
-  </div>
-  <button id="toolsToggle" class="icon-btn" aria-label="Filters" title="Platform, labels, show filtered/unlisted, fix old links">⚙</button>
-</header>
 
-<div id="sidebarBackdrop"></div>
-
-<div class="layout">
-  <aside id="sidebar">
-    <div class="sidebar-head">
-      <h3>Creators</h3>
-      <button id="sidebarClose" class="icon-btn" aria-label="Close">✕</button>
+      </section>
     </div>
+    <section class="settings-section" id="settings-creators"><h2>Channels &amp; creators</h2><p>Choose a creator to view their videos. Hide creators to tidy your feed.</p>
+  <input id="creatorSearch" type="search" placeholder="Search channels &amp; creators…" aria-label="Search channels and creators">
+  <p id="creatorSearchStatus" role="status"></p>
+  <aside id="sidebar">
     <div id="creatorList"></div>
   </aside>
+    </section>
+  </div>
+</section>
+
+
+
+<div class="layout">
+
 
   <main>
     <div id="channelHeader" class="hidden">
@@ -644,6 +778,7 @@
       <button id="channelUnlistBtn"></button>
     </div>
     <div id="grid"></div>
+    <div id="feedSentinel"><p id="feedStatus" role="status" aria-live="polite"></p><button id="feedMoreBtn" hidden>Load more</button></div>
     <div id="empty">
       <h2>Nothing here</h2>
       <p id="emptyMsg">No videos match this filter.</p>
@@ -666,25 +801,30 @@
 
 <div id="playerOverlay">
   <div id="playerCard">
+    <button id="playerFullscreen" aria-label="Toggle fullscreen" title="Fullscreen (F)">⛶</button>
     <button id="playerClose" aria-label="Close">✕</button>
     <div id="playerMediaWrap">
       <span id="speedBadge"></span>
       <video id="playerVideo" autoplay playsinline loop></video>
-      <iframe id="playerFrame" class="hidden" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+      <iframe id="playerFrame" class="hidden" title="YouTube video player" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe>
       <div id="playerYtCapture" class="hidden"></div>
       <div id="playerFallback">
         <p id="playerFallbackMsg">Playback isn't available right now — this can happen either because the video was synced before we started saving playable links, or because Douyin's saved link expired (its signed CDN URL is only valid for about a day).</p>
         <button id="playerRefreshBtn">Refresh link</button>
       </div>
-      <div id="playerProgressTrack"><div id="playerProgressFill"></div></div>
+      <div id="playerProgressTrack" aria-label="Playback progress">
+        <span id="playerElapsed">0:00</span>
+        <div class="seek-track"><div id="playerProgressFill"></div><input id="playerSeek" type="range" min="0" max="1000" value="0" disabled aria-label="Seek video"></div>
+        <span id="playerDuration">--:--</span>
+      </div>
       <!-- TikTok-style right-side action rail: Star and Watch later are
            direct single-tap toggles; the tag icon opens #playerSheet below
            for score/labels/Unfollow/Unlist instead of showing them inline. -->
       <div id="playerRail">
-        <button id="playerStarToggle" class="rail-btn" title="Star for later review"></button>
-        <button id="playerWatchLaterToggle" class="rail-btn" title="Queue this (long) video to watch later">🕓</button>
-        <button id="playerSheetToggle" class="rail-btn" title="Rate and tag">
-          🏷<span class="rail-badge" id="playerRailBadge"></span>
+        <button id="playerStarToggle" class="rail-btn" title="Star for later review" aria-label="Star video" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.2-.9z"/></svg></button>
+        <button id="playerWatchLaterToggle" class="rail-btn" title="Watch later" aria-label="Watch later" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></button>
+        <button id="playerSheetToggle" class="rail-btn" title="Rate and tag" aria-label="Rate and tag" aria-expanded="false" aria-controls="playerSheet">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13.5 13.5 20a2 2 0 0 1-2.8 0L3 12.3V4h8.3l8.7 6.7a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="8" r="1"/></svg><span class="rail-badge" id="playerRailBadge"></span>
         </button>
       </div>
       <!-- Title below the player, channel name under the title, published
@@ -695,10 +835,10 @@
         <div id="playerTitleRow">
           <div class="title" id="playerTitle"></div>
         </div>
-        <div id="playerLink"><a id="playerSourceLink" href="#" target="_blank" rel="noopener"></a></div>
+        <div id="playerLink"><span id="playerYtNotice" role="status"></span></div>
         <div id="playerChannelRow">
           <span class="platform-badge" id="playerPlatformBadge"></span>
-          <span id="playerChannelName"></span>
+          <a id="playerSourceLink" href="#" target="_blank" rel="noopener"><span id="playerChannelName"></span></a>
           <span id="playerDate"></span>
         </div>
       </div>
@@ -749,9 +889,6 @@ const searchBox = document.getElementById('searchBox');
 const channelHeader = document.getElementById('channelHeader');
 const channelHeaderName = document.getElementById('channelHeaderName');
 const channelUnlistBtn = document.getElementById('channelUnlistBtn');
-const sidebarToggle = document.getElementById('sidebarToggle');
-const sidebarClose = document.getElementById('sidebarClose');
-const sidebarBackdrop = document.getElementById('sidebarBackdrop');
 const toolsToggle = document.getElementById('toolsToggle');
 const headerControls = document.getElementById('headerControls');
 
@@ -781,20 +918,34 @@ function unlockBodyScroll() {
   window.scrollTo(0, bodyScrollY);
 }
 
-// Mobile-only chrome: off-canvas creator drawer + filters/sync dropdown.
-// closeSidebar is a harmless no-op on desktop, where the drawer is never
-// opened (the toggle button that opens it is display:none there).
-function closeSidebar() { document.body.classList.remove('sidebar-open'); unlockBodyScroll(); }
-function closeTools() { headerControls.classList.remove('open'); }
-sidebarToggle.addEventListener('click', () => {
-  const opening = !document.body.classList.contains('sidebar-open');
-  document.body.classList.toggle('sidebar-open');
-  closeTools();
-  if (opening) lockBodyScroll(); else unlockBodyScroll();
-});
-sidebarClose.addEventListener('click', closeSidebar);
-sidebarBackdrop.addEventListener('click', closeSidebar);
-toolsToggle.addEventListener('click', () => { headerControls.classList.toggle('open'); closeSidebar(); });
+// Settings is a normal page in the same app; browser Back returns to the feed.
+let settingsReturnFocus = null;
+function isSettingsRoute() { return location.hash.startsWith('#settings'); }
+function syncSettingsPage() {
+  const open = isSettingsRoute();
+  document.body.classList.toggle('settings-open', open);
+  headerControls.classList.toggle('open', open);
+  toolsToggle.setAttribute('aria-expanded', String(open));
+}
+function openSettings() {
+  settingsReturnFocus = document.activeElement;
+  location.hash = 'settings';
+  syncSettingsPage();
+  window.scrollTo(0, 0);
+  document.getElementById('settingsTitle').focus({preventScroll: true});
+}
+function closeTools() {
+  if (!isSettingsRoute()) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  syncSettingsPage();
+  window.scrollTo(0, 0);
+  settingsReturnFocus?.focus({preventScroll: true});
+}
+function closeSidebar() { closeTools(); }
+toolsToggle.addEventListener('click', () => isSettingsRoute() ? closeTools() : openSettings());
+document.getElementById('settingsBack').addEventListener('click', closeTools);
+window.addEventListener('hashchange', syncSettingsPage);
+syncSettingsPage();
 
 function showBusy(text) {
   busyText.textContent = text;
@@ -814,6 +965,7 @@ const playerChannelRow = document.getElementById('playerChannelRow');
 const playerPlatformBadge = document.getElementById('playerPlatformBadge');
 const playerChannelName = document.getElementById('playerChannelName');
 const playerSourceLink = document.getElementById('playerSourceLink');
+const playerYtNotice = document.getElementById('playerYtNotice');
 const playerDate = document.getElementById('playerDate');
 const playerProgressFill = document.getElementById('playerProgressFill');
 const playerUnfollowBtn = document.getElementById('playerUnfollowBtn');
@@ -833,8 +985,8 @@ const playerSheetClose = document.getElementById('playerSheetClose');
 // The rate/tag bottom sheet (score + labels + Unfollow/Unlist) — hidden by
 // default, opened via the rail's tag icon, same idea as TikTok tucking
 // comments behind one icon instead of showing them inline under the video.
-function openSheet() { playerSheet.classList.add('show'); playerSheetBackdrop.classList.add('show'); }
-function closeSheet() { playerSheet.classList.remove('show'); playerSheetBackdrop.classList.remove('show'); }
+function openSheet() { playerSheetToggle.setAttribute('aria-expanded', 'true'); playerSheet.classList.add('show'); playerSheetBackdrop.classList.add('show'); }
+function closeSheet() { playerSheetToggle.setAttribute('aria-expanded', 'false'); playerSheet.classList.remove('show'); playerSheetBackdrop.classList.remove('show'); }
 playerSheetToggle.addEventListener('click', openSheet);
 playerSheetClose.addEventListener('click', closeSheet);
 playerSheetBackdrop.addEventListener('click', closeSheet);
@@ -846,32 +998,28 @@ let creatorsByName = {}; // populated by loadCreators(); {name: {platform, unlis
 let ytPlaying = true;
 let ytVolume = 100;
 let ytFallbackTimer = null;
-// YouTube sometimes serves an interstitial ("Sign in to confirm you're not
-// a bot") in place of the actual embedded player — a plain HTML page inside
-// the iframe, not the JS player, so it's cross-origin-invisible to us and
-// never fires an error event. But the real player starts broadcasting
-// postMessage traffic (the same channel setPlaybackRate/ytCommand already
-// use) within a second or two of loading; the interstitial never does. So
-// silence past this timeout after (re)loading the iframe is used as a proxy
-// for "this is the bot wall, not just a slow connection" — confirmed
-// 2026-08-10, matches the Tasks.md report of playback failing with that
-// exact message.
+let playbackRecoveryAttempted = false;
+let playbackGeneration = 0;
+// Cross-origin message silence cannot distinguish a playing video from a
+// blocked embed. A timeout may offer help, but must never hide/reload media.
 const YT_LOAD_TIMEOUT_MS = 9000;
-const YT_BLOCKED_MSG = "YouTube is showing its “Sign in to confirm you’re not a bot” page instead of the player — that's YouTube blocking the embed, not a problem with this video. It usually clears up on retry; you can also open it directly on YouTube using the link below the title.";
 
 function armYtFallbackTimer() {
   clearTimeout(ytFallbackTimer);
+  playerYtNotice.textContent = '';
+  const generation = playbackGeneration;
   ytFallbackTimer = setTimeout(() => {
-    if (currentPlatform !== 'youtube' || !currentVideo) return;
-    playerFrame.classList.add('hidden'); // same show/hide pairing as the
-      // Douyin <video> error path below — #playerFallback is a flex sibling,
-      // not an absolute overlay, so the blocked iframe must be hidden or
-      // both would render side by side
-    playerYtCapture.classList.add('hidden');
-    playerFallbackMsg.textContent = YT_BLOCKED_MSG;
-    playerFallback.classList.add('show');
+    if (generation !== playbackGeneration || currentPlatform !== 'youtube' || !currentVideo) return;
+    playerYtNotice.textContent = ' · If playback is stuck, tap the creator name to open the source video.';
   }, YT_LOAD_TIMEOUT_MS);
 }
+playerFrame.addEventListener('load', () => {
+  if (currentPlatform !== 'youtube') return;
+  playerFrame.contentWindow.postMessage(JSON.stringify({event: 'listening', id: 'myfollows'}), 'https://www.youtube.com');
+  for (const event of ['onStateChange', 'onError', 'onAutoplayBlocked']) {
+    playerFrame.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'addEventListener', args: [event]}), 'https://www.youtube.com');
+  }
+});
 const DEFAULT_PLAYBACK_RATE = 1.75;
 
 function fmtDate(iso) {
@@ -903,7 +1051,13 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+let playerVideos = [];
 function openPlayer(v) {
+  if (!playerOverlay.classList.contains('show')) playerVideos = currentVideos.slice();
+  playbackGeneration++;
+  playbackRecoveryAttempted = false;
+  playerYtNotice.textContent = '';
+  playerFallbackMsg.textContent = 'This video could not be played. Retry or open it on the source platform.';
   lockBodyScroll();
   playerTitle.textContent = v.title || '(untitled)';
   playerPlatformBadge.className = `platform-badge ${v.platform}`;
@@ -911,15 +1065,16 @@ function openPlayer(v) {
   playerChannelName.textContent = `@${v.user || 'unknown'}`;
   playerDate.textContent = fmtDateWithAge(v.published_at);
   playerSourceLink.href = v.url;
-  playerSourceLink.textContent = v.platform === 'youtube' ? 'Open on YouTube ↗' : 'Open on Douyin ↗';
+  playerSourceLink.setAttribute('aria-label', `Open this video on ${v.platform === 'youtube' ? 'YouTube' : 'Douyin'}`);
+  playerSourceLink.title = v.platform === 'youtube' ? 'Open video on YouTube' : 'Open video on Douyin';
   playerUnfollowBtn.disabled = false;
   playerUnfollowBtn.textContent = v.platform === 'youtube' ? 'Unsubscribe' : 'Unfollow';
   playerOverlay.classList.add('show');
+  if (window.matchMedia('(min-width: 861px) and (pointer: fine)').matches) requestPlayerFullscreen();
   currentPlatform = v.platform;
   currentVideo = v;
-  playerProgressFill.style.width = '0%'; // reset for the new video — the
-    // native <video>'s 'timeupdate' listener below fills this back in;
-    // YouTube's iframe can't report progress across origins, so it stays 0%
+  playerRefreshBtn.disabled = false;
+  updatePlaybackProgress(0, 0);
   clearTimeout(ytFallbackTimer); // stop any pending "blocked" check armed for
     // whatever was playing before — otherwise it could fire later and show
     // the YouTube fallback message over an unrelated (possibly Douyin) video
@@ -944,7 +1099,7 @@ function openPlayer(v) {
     // loop=1 only repeats a single video (rather than the whole "up next"
     // queue) when paired with playlist=<same id> — YouTube's documented
     // quirk for looping one embedded video.
-    playerFrame.src = `https://www.youtube.com/embed/${v.id}?autoplay=1&enablejsapi=1&loop=1&playlist=${v.id}&origin=${encodeURIComponent(location.origin)}`;
+    playerFrame.src = `https://www.youtube.com/embed/${v.id}?autoplay=1&playsinline=1&enablejsapi=1&loop=1&playlist=${v.id}&origin=${encodeURIComponent(location.origin)}`;
     armYtFallbackTimer();
   } else {
     playerFrame.classList.add('hidden');
@@ -958,13 +1113,33 @@ function openPlayer(v) {
     playerVideo.playbackRate = DEFAULT_PLAYBACK_RATE;
   }
 
-  if (!v.watched) {
-    v.watched = true;
-    toggleWatched(v.id, true);
-  }
-
   renderPlayerMark(v);
+  requestAnimationFrame(positionPlayerChrome);
 }
+
+
+function positionPlayerChrome() {
+  if (!playerOverlay.classList.contains('show')) return;
+  const media = currentPlatform === 'youtube' ? playerFrame : playerVideo;
+  const bounds = media.getBoundingClientRect();
+  const host = document.getElementById('playerMediaWrap').getBoundingClientRect();
+  const style = document.getElementById('playerMediaWrap').style;
+  const left = Math.max(0, bounds.left - host.left);
+  const right = Math.max(0, host.right - bounds.right);
+  style.setProperty('--media-left', `${left}px`);
+  style.setProperty('--media-inset', `${right}px`);
+  style.setProperty('--media-right', `${Math.max(12, right + 12)}px`);
+  const railHeight = document.getElementById('playerRail').getBoundingClientRect().height;
+  const railCenter = Math.max(64 + railHeight / 2, Math.min(host.height * .54, bounds.bottom - host.top - railHeight / 2 - 12));
+  style.setProperty('--rail-center', `${railCenter}px`);
+  style.setProperty('--media-end', `${bounds.bottom - host.top}px`);
+  style.setProperty('--media-bottom', `${Math.max(0, host.bottom - bounds.bottom)}px`);
+}
+const playerLayoutObserver = new ResizeObserver(positionPlayerChrome);
+playerLayoutObserver.observe(playerVideo);
+playerLayoutObserver.observe(playerFrame);
+playerLayoutObserver.observe(document.getElementById('playerMediaWrap'));
+window.addEventListener('resize', positionPlayerChrome);
 
 // Scoring/labeling/starring controls live in the player dialog (not the
 // grid card) — re-rendered fresh on each openPlayer() call since they
@@ -975,12 +1150,13 @@ function renderPlayerMark(v) {
   // Rail icons are icon-only (no label text — there's no room in a 46px
   // circle), with the active/inactive state carried by the filled vs.
   // outline glyph plus the .active background color set in CSS.
-  playerStarToggle.textContent = v.starred ? '★' : '☆';
+  playerStarToggle.setAttribute('aria-pressed', String(!!v.starred));
   playerStarToggle.title = v.starred ? 'Starred — tap to unstar' : 'Star for later review';
   playerStarToggle.classList.toggle('active', !!v.starred);
 
   playerWatchLaterToggle.title = v.watch_later ? 'Queued for watch later — tap to remove' : 'Queue this (long) video to watch later';
   playerWatchLaterToggle.classList.toggle('active', !!v.watch_later);
+  playerWatchLaterToggle.setAttribute('aria-pressed', String(!!v.watch_later));
 
   // Small badge on the tag icon so score/labels are visible at a glance
   // without opening the sheet — the score number if set, otherwise a dot if
@@ -1067,12 +1243,41 @@ playerVideo.addEventListener('loadedmetadata', () => {
   }
 });
 
-// Drives #playerProgressTrack's fill, TikTok-style — only fires for the
-// native <video> (Douyin); the YouTube iframe never triggers this listener
-// since progress lives in a cross-origin document we can't observe.
-playerVideo.addEventListener('timeupdate', () => {
-  if (!isFinite(playerVideo.duration) || playerVideo.duration <= 0) return;
-  playerProgressFill.style.width = `${(playerVideo.currentTime / playerVideo.duration) * 100}%`;
+// Shared timeline for native video events and YouTube infoDelivery messages.
+let playbackDuration = 0;
+function formatPlaybackTime(value) {
+  const seconds = Math.max(0, Math.floor(value));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+function updatePlaybackProgress(current, duration) {
+  if (Number.isFinite(duration) && duration > 0) playbackDuration = duration;
+  else playbackDuration = 0;
+  const time = Number.isFinite(current) ? Math.max(0, Math.min(current, playbackDuration)) : 0;
+  const fraction = playbackDuration ? time / playbackDuration : 0;
+  playerProgressFill.style.width = `${fraction * 100}%`;
+  const seek = document.getElementById('playerSeek');
+  seek.value = Math.round(fraction * 1000);
+  seek.disabled = !playbackDuration;
+  seek.setAttribute('aria-valuetext', `${formatPlaybackTime(time)} of ${playbackDuration ? formatPlaybackTime(playbackDuration) : 'unknown duration'}`);
+  document.getElementById('playerElapsed').textContent = formatPlaybackTime(time);
+  document.getElementById('playerDuration').textContent = playbackDuration ? formatPlaybackTime(playbackDuration) : '--:--';
+}
+for (const event of ['timeupdate', 'durationchange', 'loadedmetadata']) {
+  playerVideo.addEventListener(event, () => {
+    if (currentPlatform === 'douyin') updatePlaybackProgress(playerVideo.currentTime, playerVideo.duration);
+  });
+}
+const playerSeek = document.getElementById('playerSeek');
+const progressTrack = document.getElementById('playerProgressTrack');
+for (const event of ['touchstart', 'touchend', 'pointerdown', 'click']) {
+  progressTrack.addEventListener(event, e => e.stopPropagation());
+}
+playerSeek.addEventListener('input', () => {
+  if (!playbackDuration) return;
+  const time = Number(playerSeek.value) / 1000 * playbackDuration;
+  if (currentPlatform === 'youtube') ytCommand('seekTo', [time, true]);
+  else playerVideo.currentTime = time;
+  updatePlaybackProgress(time, playbackDuration);
 });
 
 const VOLUME_STEP = 10; // percentage points, 0-100 scale (matches YouTube's IFrame API)
@@ -1111,21 +1316,94 @@ function showBadge(text) {
   speedBadgeTimer = setTimeout(() => speedBadge.classList.remove('show'), 800);
 }
 
-playerVideo.addEventListener('error', () => {
+function markPlayingVideoWatched() {
+  const v = currentVideo;
+  if (!v || v.watched) return;
+  v.watched = true;
+  toggleWatched(v.id, true).catch(() => { v.watched = false; });
+}
+playerVideo.addEventListener('playing', () => {
+  if (currentPlatform === 'douyin') markPlayingVideoWatched();
+});
+
+async function recoverDouyinPlayback() {
+  if (!currentVideo || currentPlatform !== 'douyin') return;
+  const generation = playbackGeneration;
+  const id = currentVideo.id;
+  playbackRecoveryAttempted = true;
+  playerRefreshBtn.disabled = true;
   playerVideo.classList.add('hidden');
+  playerFallbackMsg.textContent = 'Refreshing the video link…';
+  playerFallback.classList.add('show');
+  try {
+    const res = await fetch(`/api/videos/${encodeURIComponent(id)}/refresh_play_url`, {method: 'POST'});
+    const data = await res.json();
+    if (generation !== playbackGeneration) return;
+    if (!res.ok || !data.ok) throw new Error(data.error || 'No playable link found. Try logging in again.');
+    playerFallback.classList.remove('show');
+    playerVideo.classList.remove('hidden');
+    playerVideo.src = `/api/play/${encodeURIComponent(id)}?retry=${Date.now()}`;
+    playerVideo.playbackRate = DEFAULT_PLAYBACK_RATE;
+  } catch (error) {
+    if (generation === playbackGeneration) playerFallbackMsg.textContent = `Could not play this video: ${error.message}`;
+  } finally {
+    if (generation === playbackGeneration) playerRefreshBtn.disabled = false;
+  }
+}
+
+playerVideo.addEventListener('error', () => {
+  if (currentPlatform !== 'douyin' || !currentVideo) return;
+  if (!playbackRecoveryAttempted) { recoverDouyinPlayback(); return; }
+  playerVideo.classList.add('hidden');
+  playerFallbackMsg.textContent = 'Playback failed after refreshing. Retry or open on Douyin.';
   playerFallback.classList.add('show');
 });
 
 const playerRefreshBtn = document.getElementById('playerRefreshBtn');
 const playerFallbackMsg = document.getElementById('playerFallbackMsg');
 
-// Any postMessage from the embedded iframe — even a routine state-change
-// ping — proves the real YouTube player loaded rather than the "Sign in to
-// confirm you're not a bot" interstitial (see ytFallbackTimer above), so
-// cancel the pending "blocked" check as soon as one arrives.
+// Valid player messages clear the optional loading hint. Only an explicit
+// player error may replace the iframe with the error UI.
 window.addEventListener('message', (event) => {
-  if (event.origin !== 'https://www.youtube.com' || currentPlatform !== 'youtube') return;
+  if (event.origin !== 'https://www.youtube.com' || event.source !== playerFrame.contentWindow || currentPlatform !== 'youtube') return;
+  let data;
+  try { data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; } catch { return; }
+  if (!data || !['onReady', 'onStateChange', 'infoDelivery', 'initialDelivery', 'onError', 'onAutoplayBlocked'].includes(data.event)) return;
   clearTimeout(ytFallbackTimer);
+  playerYtNotice.textContent = '';
+  if (data.info && typeof data.info === 'object' &&
+      (Number.isFinite(data.info.currentTime) || Number.isFinite(data.info.duration))) {
+    updatePlaybackProgress(data.info.currentTime ?? 0, data.info.duration ?? playbackDuration);
+  }
+  if (data.event === 'onAutoplayBlocked') {
+    // A phone may require a tap inside the cross-origin player itself.
+    // Let YouTube receive that tap instead of intercepting it for gestures.
+    playerYtCapture.classList.add('hidden');
+    playerYtNotice.textContent = ' · Tap Play in the YouTube player to start.';
+  }
+  if (data.event === 'onError') {
+    playerFrame.classList.add('hidden');
+    playerYtCapture.classList.add('hidden');
+    const code = Number(data.info);
+    const reasons = {
+      2: 'YouTube rejected the video ID.',
+      5: 'YouTube could not play this video in this browser.',
+      100: 'This video is unavailable or private.',
+      101: 'The owner does not allow this video to play in other apps.',
+      150: 'The owner does not allow this video to play in other apps.',
+      153: 'YouTube could not verify this embedded player. The browser may be withholding the site referrer.'
+    };
+    playerFallbackMsg.textContent = `YouTube error ${Number.isFinite(code) ? code : 'unknown'}: ${reasons[code] || 'YouTube could not play this embed.'} Tap the creator name below to open on YouTube.`;
+    playerFallback.classList.add('show');
+  }
+  const state = data.event === 'onStateChange' ? data.info : data.info?.playerState;
+  if (state === 1 || state === 2) ytPlaying = state === 1;
+  if (state === 1) {
+    playerFrame.classList.remove('hidden');
+    playerYtCapture.classList.remove('hidden');
+    playerFallback.classList.remove('show');
+    markPlayingVideoWatched();
+  }
 });
 
 playerRefreshBtn.addEventListener('click', async () => {
@@ -1134,31 +1412,22 @@ playerRefreshBtn.addEventListener('click', async () => {
     playerFallback.classList.remove('show');
     playerFrame.classList.remove('hidden');
     playerYtCapture.classList.remove('hidden');
-    playerFrame.src = `https://www.youtube.com/embed/${currentVideo.id}?autoplay=1&enablejsapi=1&loop=1&playlist=${currentVideo.id}&origin=${encodeURIComponent(location.origin)}`;
+    playerFrame.src = `https://www.youtube.com/embed/${currentVideo.id}?autoplay=1&playsinline=1&enablejsapi=1&loop=1&playlist=${currentVideo.id}&origin=${encodeURIComponent(location.origin)}`;
     armYtFallbackTimer();
     return;
   }
-  playerRefreshBtn.disabled = true;
-  playerRefreshBtn.textContent = 'Refreshing…';
-  try {
-    const res = await fetch(`/api/videos/${currentVideo.id}/refresh_play_url`, { method: 'POST' });
-    const data = await res.json();
-    if (data.ok) {
-      playerFallback.classList.remove('show');
-      playerVideo.classList.remove('hidden');
-      playerVideo.src = `/api/play/${currentVideo.id}`;
-    } else {
-      playerFallbackMsg.textContent = data.error
-        ? `Couldn't refresh: ${data.error}`
-        : "Couldn't find a playable link for this video — it may have been deleted, or you may need to log in to Douyin again.";
-    }
-  } finally {
-    playerRefreshBtn.disabled = false;
-    playerRefreshBtn.textContent = 'Refresh link';
-  }
+  await recoverDouyinPlayback();
 });
 
 function closePlayer() {
+  if (document.fullscreenElement === document.documentElement) {
+    document.exitFullscreen().catch(() => {});
+  }
+  playbackGeneration++;
+  playerVideos = [];
+  currentVideo = null;
+  currentPlatform = null;
+  playerYtNotice.textContent = '';
   playerOverlay.classList.remove('show');
   closeSheet(); // reset for next open — otherwise the sheet could reopen already-expanded on an unrelated video
   unlockBodyScroll();
@@ -1171,6 +1440,7 @@ function closePlayer() {
 }
 
 playerClose.addEventListener('click', closePlayer);
+document.getElementById('playerFullscreen').addEventListener('click', toggleFullscreen);
 // Tapping/clicking the capture layer (see its definition above) is the only
 // way to pause a YouTube video by hand — the iframe itself is cross-origin
 // and never sees the click, and a swipe that crosses SWIPE_THRESHOLD_PX
@@ -1178,14 +1448,7 @@ playerClose.addEventListener('click', closePlayer);
 // finger movement), so this only fires for genuine taps, never swipes.
 playerYtCapture.addEventListener('click', togglePause);
 
-// Same behavior as clicking a creator's @name on a grid card — filters the
-// grid to just their videos. Closes the player first since the filtered
-// grid sits behind it.
-playerChannelRow.addEventListener('click', () => {
-  if (!currentVideo) return;
-  closePlayer();
-  selectCreator(currentVideo.user);
-});
+// The creator name links directly to the source video.
 
 // TikTok-style vertical swipe/scroll moves between videos in the currently
 // loaded list — but advancing to the NEXT video is gated on having both
@@ -1197,9 +1460,9 @@ function isRatedAndTagged(v) {
 }
 
 let navLocked = false; // debounces both wheel (fires repeatedly per gesture) and touch swipes
-function goToVideo(delta) {
+async function goToVideo(delta) {
   if (!currentVideo || navLocked) return;
-  const idx = currentVideos.findIndex(v => v.id === currentVideo.id);
+  const idx = playerVideos.findIndex(v => v.id === currentVideo.id);
   if (idx === -1) return;
   if (delta > 0 && !isRatedAndTagged(currentVideo)) {
     showBadge('Rate & tag to continue ↑');
@@ -1207,9 +1470,15 @@ function goToVideo(delta) {
     return;
   }
   const nextIdx = idx + delta;
-  if (nextIdx < 0 || nextIdx >= currentVideos.length) return;
+  if (nextIdx < 0) return;
   navLocked = true;
-  openPlayer(currentVideos[nextIdx]);
+  if (nextIdx >= playerVideos.length && feedHasMore) {
+    const generation = playbackGeneration;
+    await loadMoreVideos();
+    if (generation !== playbackGeneration) { navLocked = false; return; }
+  }
+  if (nextIdx >= playerVideos.length) { navLocked = false; return; }
+  openPlayer(playerVideos[nextIdx]);
   setTimeout(() => { navLocked = false; }, 400);
 }
 
@@ -1269,16 +1538,23 @@ function togglePause() {
   else { playerVideo.pause(); showBadge('❚❚'); }
 }
 
+function requestPlayerFullscreen() {
+  if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
+  // Include the sibling rate/tag sheet as well as the media and timeline.
+  // Requests without a user gesture may be denied; retain the viewport player.
+  try {
+    const result = document.documentElement.requestFullscreen();
+    if (result?.catch) result.catch(() => {});
+  } catch { /* Full-viewport playback remains available. */ }
+}
 function toggleFullscreen() {
   if (document.fullscreenElement) {
-    document.exitFullscreen();
+    document.exitFullscreen().catch(() => {});
     return;
   }
-  // Fullscreen just the video/iframe element, not the whole #playerCard
-  // (title/meta/labels shouldn't come along into fullscreen).
-  const el = currentPlatform === 'youtube' ? playerFrame : playerVideo;
-  el.requestFullscreen();
+  requestPlayerFullscreen();
 }
+document.addEventListener('fullscreenchange', () => requestAnimationFrame(positionPlayerChrome));
 
 // Grid-level shortcuts (only active while the player is closed): vim-style
 // count prefix + command, e.g. "5" then "m" marks the first 5 visible
@@ -1534,23 +1810,26 @@ function updateCardInPlace(id, watched) {
 }
 
 function refreshGridChrome() {
+  updateFeedFooter();
+  if (feedHasMore && currentVideos.length === 0) { loadMoreVideos(); return; }
   const count = grid.children.length;
-  countLabel.textContent = count ? ` · ${count}` : '';
+  countLabel.textContent = count ? ` · ${count}${feedHasMore ? ' loaded' : ''}` : '';
   if (count === 0) {
     empty.style.display = 'block';
     emptyMsg.textContent = unwatchedOnly.checked
-      ? "You're caught up — nothing unwatched. Try syncing, or uncheck \"Unwatched only\"."
+      ? "You're caught up — nothing unwatched. Try syncing, or turn off \"Unwatched only\" in settings."
       : 'No videos match this filter.';
   }
 }
 
 async function toggleWatched(id, watched) {
   updateCardInPlace(id, watched);
-  await fetch(`/api/videos/${id}/watched`, {
+  const response = await fetch(`/api/videos/${id}/watched`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ watched }),
   });
+  if (!response.ok) throw new Error("Could not save watched state");
   loadCreators();
 }
 
@@ -1560,7 +1839,7 @@ function selectCreator(user) {
   renderCreatorActiveState();
   renderChannelHeader();
   loadVideos();
-  closeSidebar(); // picking a creator on mobile should dismiss the drawer, not leave it covering the now-filtered grid
+  closeSidebar(); // selecting a creator returns to their filtered feed
 }
 
 // Shown above the grid only when a specific creator is selected (not "All
@@ -1600,17 +1879,19 @@ function renderCreatorList() {
   creatorList.innerHTML = '';
   creatorsByName = Object.fromEntries(lastCreators.map(c => [c.name, c]));
 
-  const allRow = document.createElement('div');
+  const allRow = document.createElement('button');
+  allRow.type = 'button';
   allRow.className = 'creator-row all';
   allRow.dataset.user = '';
   allRow.innerHTML = `<span class="cname">All creators</span>`;
   allRow.addEventListener('click', () => selectCreator(''));
   creatorList.appendChild(allRow);
 
-  const q = searchBox.value.trim().toLowerCase();
+  const q = document.getElementById('creatorSearch').value.trim().toLowerCase();
   let creators = showUnlisted.checked ? lastCreators : lastCreators.filter(c => !c.unlisted);
   if (q) creators = creators.filter(c => c.name.toLowerCase().includes(q));
 
+  document.getElementById('creatorSearchStatus').textContent = creators.length ? `${creators.length} ${creators.length === 1 ? 'creator' : 'creators'}` : 'No creators match. Try another search or adjust the platform filter.';
   creators.forEach(c => {
     const row = document.createElement('div');
     row.className = 'creator-row' + (c.unlisted ? ' unlisted' : '');
@@ -1618,7 +1899,7 @@ function renderCreatorList() {
     const badge = c.unwatched_synced > 0 ? c.unwatched_synced : '';
     row.innerHTML = `
       <img src="${c.avatar_url}" loading="lazy" alt="" onerror="this.style.visibility='hidden'">
-      <span class="cname">${escapeHtml(c.name)}</span>
+      <button class="cname creator-select" type="button">${escapeHtml(c.name)}</button>
       <span class="cbadge">${badge}</span>
       <button class="cunlist" title="${c.unlisted ? 'Relist — show their videos in your feed again' : 'Unlist — hide their videos from your feed without unfollowing'}">${c.unlisted ? 'Relist' : 'Unlist'}</button>
     `;
@@ -1632,6 +1913,8 @@ function renderCreatorList() {
   renderCreatorActiveState();
   renderChannelHeader();
 }
+
+document.getElementById('creatorSearch').addEventListener('input', renderCreatorList);
 
 async function loadCreators() {
   const params = new URLSearchParams();
@@ -1656,9 +1939,8 @@ function setRecommendedMode(on) {
     .forEach(el => { el.disabled = on; });
 }
 
-// Local text search over the title/channel of whatever the current filters
-// already produced — no server round trip, since /api/videos already
-// returns its whole matching set unpaginated (see loadVideos).
+// Recommended mode keeps its bounded top-40 pool; the normal feed searches
+// all matching rows on the server before cursor pagination.
 function filterBySearch(videos) {
   const q = searchBox.value.trim().toLowerCase();
   if (!q) return videos;
@@ -1667,49 +1949,39 @@ function filterBySearch(videos) {
   );
 }
 
-// Cached so the search box can re-filter locally (see applySearch) without
-// re-hitting the server on every keystroke.
-let lastRawVideos = [];
-let lastEmptyText = '';
-let lastSearchEmptyText = '';
+// Fetch only the current batch, with a cursor stable across watched removals.
+const FEED_BATCH_SIZE = 50;
+let feedGeneration = 0;
+let feedCursor = null;
+let feedHasMore = false;
+let feedLoading = false;
+let feedParams = '';
+let feedRecommended = false;
+let feedController = null;
+let feedRequestPromise = null;
+let feedError = false;
+const feedSentinel = document.getElementById('feedSentinel');
+const feedMoreBtn = document.getElementById('feedMoreBtn');
+const feedStatus = document.getElementById('feedStatus');
+const feedObserver = new IntersectionObserver(entries => {
+  if (entries.some(entry => entry.isIntersecting) && !feedError && !feedLoading &&
+      !isSettingsRoute() && !playerOverlay.classList.contains('show')) loadMoreVideos();
+}, {rootMargin: '400px'});
+feedMoreBtn.addEventListener('click', () => loadMoreVideos());
 
-function renderGrid(rawVideos, emptyText, searchEmptyText) {
-  lastRawVideos = rawVideos;
-  lastEmptyText = emptyText;
-  lastSearchEmptyText = searchEmptyText;
-  const videos = filterBySearch(rawVideos);
-  currentVideos = videos;
-  grid.innerHTML = '';
-  if (videos.length === 0) {
-    empty.style.display = 'block';
-    emptyMsg.textContent = searchBox.value.trim() ? searchEmptyText : emptyText;
-  } else {
-    empty.style.display = 'none';
-    videos.forEach(v => grid.appendChild(card(v)));
-  }
-  countLabel.textContent = videos.length ? ` · ${videos.length}${recommendedMode ? ' recommended' : ''}` : '';
+function updateFeedFooter() {
+  feedMoreBtn.hidden = !feedHasMore || feedLoading;
+  feedMoreBtn.textContent = feedError ? 'Retry loading videos' : 'Load more';
+  feedStatus.textContent = feedLoading ? 'Loading videos…' : feedError
+    ? 'Could not load videos. Try again.' : !feedHasMore && currentVideos.length ? 'You’ve reached the end.' : '';
+  feedObserver.unobserve(feedSentinel);
+  if (feedHasMore && !feedLoading && !feedError) feedObserver.observe(feedSentinel);
+  countLabel.textContent = currentVideos.length ? ` · ${currentVideos.length}${feedHasMore ? ' loaded' : ''}${feedRecommended ? ' recommended' : ''}` : '';
 }
 
-// Re-render from the last server response using the current search text —
-// called on searchBox input, cheaper than a full loadVideos() round trip.
-function applySearch() {
-  renderGrid(lastRawVideos, lastEmptyText, lastSearchEmptyText);
-  renderCreatorList();
-}
-
-async function loadVideos() {
-  if (recommendedMode) {
-    const res = await fetch('/api/videos/recommended?limit=40');
-    const data = await res.json();
-    renderGrid(
-      data.videos,
-      "You're caught up — nothing unwatched to recommend from.",
-      'No recommended videos match your search.'
-    );
-    return;
-  }
-
+function makeFeedParams() {
   const params = new URLSearchParams();
+  params.set('limit', String(FEED_BATCH_SIZE));
   if (unwatchedOnly.checked) params.set('watched', 'false');
   if (showFiltered.checked) params.set('show_filtered', 'true');
   if (showUnlisted.checked) params.set('show_unlisted', 'true');
@@ -1718,61 +1990,117 @@ async function loadVideos() {
   if (labelFilter.value) params.set('label', labelFilter.value);
   if (starredOnly.checked) params.set('starred', 'true');
   if (watchLaterOnly.checked) params.set('watch_later', 'true');
-
-  const res = await fetch('/api/videos?' + params.toString());
-  const data = await res.json();
-
-  if (!labelFilterPopulated && data.label_categories) {
-    labelFilterPopulated = true;
-    allLabelCategories = data.label_categories;
-    data.label_categories.forEach(label => {
-      const opt = document.createElement('option');
-      opt.value = label;
-      opt.textContent = label.replace(/_/g, ' ');
-      labelFilter.appendChild(opt);
-    });
-  }
-
-  renderGrid(
-    data.videos,
-    unwatchedOnly.checked
-      ? "You're caught up — nothing unwatched. Try syncing, or uncheck \"Unwatched only\"."
-      : 'No videos match this filter.',
-    'No videos match your search.'
-  );
+  if (searchBox.value.trim()) params.set('q', searchBox.value.trim());
+  return params.toString();
 }
 
-// Runs Douyin then YouTube sync back-to-back behind one button — mirrors
-// server.py's own _sync_both_platforms used for the startup/daily sync,
-// just driven from the client instead of over loopback.
+async function loadMoreVideos() {
+  if (feedLoading) return feedRequestPromise;
+  if (!feedHasMore) return false;
+  const generation = feedGeneration;
+  const params = new URLSearchParams(feedParams);
+  if (feedCursor) params.set('cursor', feedCursor);
+  const controller = feedController = new AbortController();
+  feedLoading = true;
+  feedError = false;
+  updateFeedFooter();
+  feedRequestPromise = (async () => {
+    try {
+      const url = feedRecommended ? '/api/videos/recommended?limit=40' : '/api/videos?' + params.toString();
+      const res = await fetch(url, {signal: controller.signal});
+      if (!res.ok) throw new Error('Could not load videos');
+      const data = await res.json();
+      if (generation !== feedGeneration) return false;
+      if (!Array.isArray(data.videos)) throw new Error('Invalid video response');
+      const more = !feedRecommended && !!data.has_more;
+      if (more && (!data.next_cursor || data.next_cursor === feedCursor)) throw new Error('Invalid video cursor');
+      if (!labelFilterPopulated && data.label_categories) {
+        labelFilterPopulated = true;
+        allLabelCategories = data.label_categories;
+        data.label_categories.forEach(label => {
+          const opt = document.createElement('option');
+          opt.value = label;
+          opt.textContent = label.replace(/_/g, ' ');
+          labelFilter.appendChild(opt);
+        });
+      }
+      const seen = new Set(currentVideos.map(v => v.id));
+      const page = (feedRecommended ? filterBySearch(data.videos) : data.videos).filter(v => {
+        if (seen.has(v.id)) return false;
+        seen.add(v.id); return true;
+      });
+      currentVideos.push(...page);
+      const fragment = document.createDocumentFragment();
+      page.forEach(v => fragment.appendChild(card(v)));
+      grid.appendChild(fragment);
+      if (playerOverlay.classList.contains('show')) {
+        const queued = new Set(playerVideos.map(v => v.id));
+        playerVideos.push(...page.filter(v => !queued.has(v.id)));
+      }
+      feedCursor = data.next_cursor || null;
+      feedHasMore = more;
+      empty.style.display = currentVideos.length || more ? 'none' : 'block';
+      emptyMsg.textContent = searchBox.value.trim() ? 'No videos match your search.' :
+        unwatchedOnly.checked ? 'You’re caught up. Try syncing or change your feed settings.' : 'No videos match this filter.';
+      return true;
+    } catch (error) {
+      if (generation !== feedGeneration || error.name === 'AbortError') return false;
+      feedError = true;
+      empty.style.display = 'none';
+      return false;
+    } finally {
+      if (generation === feedGeneration) {
+        feedLoading = false;
+        feedRequestPromise = null;
+        updateFeedFooter();
+      }
+    }
+  })();
+  return feedRequestPromise;
+}
+
+function applySearch() {
+  loadVideos();
+  renderCreatorList();
+}
+function loadVideos() {
+  const nextParams = makeFeedParams();
+  const changed = nextParams !== feedParams || recommendedMode !== feedRecommended;
+  if (changed && !isSettingsRoute() && !playerOverlay.classList.contains('show')) window.scrollTo(0, 0);
+  feedGeneration++;
+  feedController?.abort();
+  feedLoading = false;
+  feedRequestPromise = null;
+  feedCursor = null;
+  feedHasMore = true;
+  feedError = false;
+  feedRecommended = recommendedMode;
+  feedParams = nextParams;
+  currentVideos = [];
+  grid.replaceChildren();
+  empty.style.display = 'none';
+  return loadMoreVideos();
+}
+
+// The server owns the work; leaving/reloading this page does not cancel it.
 async function runSync() {
   syncBtn.disabled = true;
-  showBusy('Syncing your follow feed…');
-  const results = [];
-
-  syncStatus.textContent = 'Syncing Douyin…';
+  syncBtn.textContent = 'Starting…';
+  syncStatus.textContent = 'Starting background sync…';
   try {
-    const res = await fetch('/api/sync?limit=30', { method: 'POST' });
+    const res = await fetch('/api/sync/start', {method: 'POST'});
     const data = await res.json();
-    results.push(data.error ? `Douyin: ${data.error}` : `Douyin +${data.new} (${data.total_in_db})`);
-  } catch (e) {
-    results.push('Douyin sync failed');
+    if (!res.ok) throw new Error(data.error || 'Could not start sync.');
+    syncStatus.textContent = data.status === 'already_running'
+      ? 'A sync is already running. You can keep browsing.'
+      : 'Sync started in the background. You can keep browsing.';
+  } catch (error) {
+    syncStatus.textContent = `${error.message} Check the status below before retrying.`;
+  } finally {
+    syncBtn.disabled = false;
+    syncBtn.textContent = 'Sync';
+    pollSyncStatus();
   }
-
-  syncStatus.textContent = 'Syncing YouTube…';
-  try {
-    const res = await fetch('/api/youtube/sync?limit=30', { method: 'POST' });
-    const data = await res.json();
-    results.push(data.error ? `YouTube: ${data.error}` : `YouTube +${data.new} (${data.total_in_db})`);
-  } catch (e) {
-    results.push('YouTube sync failed');
-  }
-
-  syncStatus.textContent = results.join(' · ');
-  loadVideos();
-  loadCreators();
-  hideBusy();
-  syncBtn.disabled = false;
 }
 
 async function runBackfill() {
@@ -1964,13 +2292,74 @@ syncBtn.addEventListener('click', runSync);
 backfillBtn.addEventListener('click', runBackfill);
 reloginBtn.addEventListener('click', runRelogin);
 loginRetryBtn.addEventListener('click', startLogin);
-// Debounced — applySearch rebuilds the whole grid and creator list, so
-// running it on every keystroke stalls typing on a phone.
+// Debounce server-side feed search while typing, especially on phones.
 let searchTimer = null;
 searchBox.addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(applySearch, 150);
 });
+
+let lastSyncSnapshot = '';
+let syncPollTimer = null;
+let syncStatusRequest = false;
+function renderSyncStatus(data) {
+  const states = data.platforms || {};
+  const job = data.job || {};
+  const running = job.running || Object.values(states).some(state => state.running || state.queued);
+  syncBtn.disabled = !!running;
+  syncBtn.textContent = running ? 'Syncing…' : 'Sync';
+  const details = document.getElementById('syncPlatformStatus');
+  details.replaceChildren();
+  for (const [platform, name] of [['douyin', 'Douyin'], ['youtube', 'YouTube']]) {
+    const state = states[platform] || {};
+    const row = document.createElement('p');
+    let status = 'Not synced since the server started.';
+    if (state.running) status = 'Syncing in the background…';
+    else if (state.queued) status = 'Waiting for the other platform…';
+    else if (state.completed_at) {
+      const time = new Date(state.completed_at).toLocaleString();
+      status = Number.isFinite(state.new) && Number.isFinite(state.fetched)
+        ? `${state.new} new videos added; ${state.fetched} videos fetched. Last finished: ${time}.`
+        : `Counts unavailable. Last finished: ${time}.`;
+      if (!state.ok) status += ` Incomplete: ${state.error || 'Please retry.'}`;
+    }
+    row.textContent = `${name}: ${status}`;
+    details.appendChild(row);
+  }
+  const latest = Object.values(states).filter(state => Number.isFinite(state.total_in_db))
+    .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))[0];
+  document.getElementById('syncLibraryTotal').textContent = latest
+    ? `Library: ${latest.total_in_db} videos across both platforms at the last update.` : '';
+  if (job.error) syncStatus.textContent = job.error;
+  else if (!running && job.completed_at) syncStatus.textContent = 'Background sync finished. See each platform’s result below.';
+  return !!running;
+}
+async function pollSyncStatus() {
+  clearTimeout(syncPollTimer);
+  if (syncStatusRequest) return;
+  syncStatusRequest = true;
+  let running = false;
+  try {
+    if (!document.hidden) {
+      const res = await fetch('/api/sync/status');
+      if (!res.ok) throw new Error('status unavailable');
+      const data = await res.json();
+      running = renderSyncStatus(data);
+      const snapshot = JSON.stringify(data.platforms);
+      if (snapshot !== lastSyncSnapshot) {
+        if (lastSyncSnapshot && !running) { loadVideos(); loadCreators(); }
+        lastSyncSnapshot = snapshot;
+      }
+    }
+  } catch {
+    syncStatus.textContent = 'Sync status is unavailable. Your cached feed is still available; reconnect to check progress.';
+  } finally {
+    syncStatusRequest = false;
+    syncPollTimer = setTimeout(pollSyncStatus, running ? 2500 : 15000);
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pollSyncStatus(); });
+pollSyncStatus();
 
 (async function init() {
   // loadVideos/loadCreators are plain local-DB reads, but /api/status waits

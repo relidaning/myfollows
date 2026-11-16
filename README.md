@@ -33,6 +33,143 @@ any other LLM at runtime.
   ever wanted, but nothing in normal operation needs it. See "MCP tools"
   below if you want to wire it into a Claude Code project's `.mcp.json`.
 
+## Interface
+
+MyFollows uses an icon and compact wordmark. Settings opens a full page with
+Feed preferences, Channels & creators, and Accounts & maintenance sections;
+Back to feed, Escape and browser navigation return to browsing. Creator search
+filters the local creator list independently of feed search. Choose a creator
+to return to their videos, or use Unlist/Relist to manage feed visibility.
+Unwatched, starred, watch-later, platform and label filters plus recommendations
+live in settings. Search and Sync stay visible in the main header.
+
+Phones use larger touch targets, safe-area spacing and a single-column settings
+layout with ordinary page scrolling. Playback adapts to portrait and landscape;
+laptops/desktops request fullscreen when opening a video. The fullscreen button
+or F toggles fullscreen with the timeline and rating controls included. Browsers
+that deny fullscreen retain the full-viewport player. Landscape YouTube videos
+fit the available viewport without the former 960px cap.
+
+The player keeps captions aligned with the media, uses quieter text and places
+the action rail just below midpoint. A seekable timeline below the media shows
+elapsed time and duration using native events or YouTube player messages;
+YouTube progress is unavailable until those messages arrive.
+
+UI styling and responsive breakpoints live in `douyin-mcp/ui.html`; no frontend
+build step or new dependency is required. Rebuild the image to serve changes.
+
+The homepage fetches 50 videos initially and appends the next 50 near the
+bottom. A Load more/Retry button also supports keyboard use and failed requests.
+Search runs over the full filtered library before pagination, including Unicode
+creator names. Changing search or filters resets the cursor; stale requests are
+aborted and ignored. Recommendations retain their bounded top-40 list. Player
+navigation fetches the next batch at the boundary and keeps its own queue when
+watched videos leave the grid. Thumbnails remain browser-lazy-loaded.
+
+The list API accepts optional `limit` (1–200), opaque `cursor` from the previous
+response, and literal `q` search. Paginated responses include `has_more` and
+`next_cursor`. Ordering uses published date then video ID so equal timestamps
+and watched removals do not shift later pages. Requests without `limit` retain
+the legacy full-list contract. New sync arrivals appear on refresh. The UI batch
+size is the product constant `FEED_BATCH_SIZE` in `ui.html`.
+
+The creator name beneath playback links to the original video; there is no
+separate “Open on…” row. Star, watch-later and tag controls use consistent inline
+SVG icons, accessible labels and visible pressed states with touch-sized targets.
+
+## Sync and playback reliability
+
+The header Sync button calls `POST /api/sync/start`, which returns HTTP 202
+immediately and runs Douyin then YouTube in one server-owned daemon thread.
+Closing/reloading the browser does not cancel it. Repeated starts return the
+existing job; startup and scheduled syncs share the coordinator and skip overlap.
+No job queue or new service is introduced. A server restart interrupts active work
+and resets its process-local status; retrying upserts safely into the existing
+SQLite database. Existing blocking platform APIs/MCP tools retain their contracts
+and remain outside this combined-job deduplication.
+
+Detailed status lives in Settings → Sync. “New videos added” counts new database
+rows from that platform, “videos fetched” includes existing rows, and “Library”
+is the shared total across both platforms at the last update. Failed operations
+without a result show unavailable counts, not zero. Manual and scheduled jobs use
+`SYNC_LIMIT` from `settings.ini` (environment overrides apply); the optional start
+endpoint `limit` parameter accepts 1–500. This change removes UI blocking, not
+the external platforms’ scraping latency.
+
+
+Automatic sync runs at startup, every 60 minutes after a run finishes, and at
+06:00 in the container timezone. Each platform fails independently; failed or
+partial runs remain visible through `GET /api/sync/status` and the UI polls
+that endpoint every 2.5 seconds while a sync is active and every 15 seconds
+while idle, pausing while hidden. Cached videos remain usable
+without waiting for login or sync. Status is process-local and resets on restart;
+manual and scheduled runs share the same background coordinator and status endpoint.
+
+The YouTube sync reads `/feed/channels` separately from recent uploads, so
+quiet subscribed channels can enter the sidebar. Collection is bounded by the
+existing scroll limits and is additive: incomplete pages never delete creators.
+A channel-list failure saves collected videos and reports an incomplete sync.
+Douyin also saves scraped creators when its video feed is empty. Neither
+platform guarantees an exhaustive inventory; selectors and page behavior still
+need validation against a live account.
+
+Douyin playback automatically refreshes its link once on a media error; a
+second failure offers manual retry and the source link. Switching or closing
+videos invalidates pending refresh results. Videos become watched only when
+playback starts (Douyin `playing`, YouTube player-state messages), rather than
+when opening a card. The existing 1.75× speed and single-video repeat remain.
+YouTube timeouts show only a small source-link hint and never hide or reload
+the iframe: missing cross-origin messages cannot establish a playback failure.
+Only explicit player errors show a fallback. Embedded playback can still be
+restricted by YouTube. Event meanings follow the
+[YouTube IFrame API reference](https://developers.google.com/youtube/iframe_api_reference).
+
+Edit `douyin-mcp/settings.ini` for the sync interval, daily hour, fetch limit,
+port, log location and retention. Matching uppercase environment variables
+override the file; integer settings are validated at startup. Relative log
+paths resolve against the source directory, independently of the launch cwd.
+`DATA_DIR`, browser session paths and `YOUTUBE_PROXY_SERVER` retain their existing
+environment configuration. Rebuild the image after changing the shipped settings
+or application source. A port change also requires updating the Dockerfile's
+healthcheck and clients; it is not a deployment-wide automatic migration.
+
+Operational logs append to `logs/YYYY-MM-DD.log` in UTC, with 14-day retention.
+Compose persists `/app/logs` to `./logs` at the repository root. Only payload-free
+startup and background sync operation events are written there; browser/library
+diagnostics still go to the console. Generate a local seven-day report with:
+
+```bash
+python3 scripts/sync_report.py --days 7 --output /tmp/myfollows-sync-report.html
+```
+
+Open the generated HTML locally. It shows daily per-platform run counts,
+failure rate, mean duration and fetched-item counts, plus missing/malformed log
+coverage. Partial results count as failures. Background manual, startup and
+scheduled runs are included; legacy blocking API calls and retries are excluded.
+Reads are limited to 31 days and 8 MiB per day. The report contains aggregate
+metrics and never includes raw log lines.
+
+The inspected layout keeps platform code and UI together in `douyin-mcp/`,
+maintenance commands in `scripts/`, checks in `tests/`, and mutable data in the
+ignored `data/` and `logs/` directories. No existing file moves were needed for
+these sync/playback fixes; `runtime.py` owns shared settings, operation logging
+and scheduler state without importing platform adapters.
+
+| Role | Implementation / source of truth | Replacement boundary |
+| --- | --- | --- |
+| API and server | FastMCP/Starlette, `douyin-mcp/requirements.txt`, `server.py` | A framework change must preserve REST shapes, streaming and MCP routes. |
+| Platform collection | Playwright, `server.py` / `youtube.py` | Selector/API changes require adapter code and live verification; session formats are browser-specific. |
+| Storage | SQLite, `common.py`, `DATA_DIR` | A database engine change needs SQL/schema adaptation and explicit data migration. |
+| Playback/UI | Native video, YouTube iframe, `ui.html` | A provider change needs player/event integration; changing a URL alone is insufficient. |
+| Scheduling/operations | Standard library, `runtime.py`, `settings.ini` | Timing settings are value changes; external scheduling must disable/replace the internal loop to avoid duplicates. |
+
+Offline validation (no saved sessions or production database required):
+
+```bash
+python3 -m unittest discover -s tests -v
+node tests/playback.test.cjs
+```
+
 ## Running it
 
 ```bash
@@ -157,6 +294,8 @@ Code chat session.
 | `GET /api/status` | Douyin: `{logged_in, in_progress}` — cheap poll, doesn't navigate away from an in-progress login |
 | `POST /api/login/start` | Starts Douyin login, saves QR |
 | `GET /api/login/qr.png` | The current Douyin QR image |
+| `POST /api/sync/start?limit=100` | Start combined background sync; HTTP 202, or existing job if already running. |
+| `GET /api/sync/status` | Fast process-local combined job and per-platform status. |
 | `POST /api/sync?limit=30` | Same as `douyin_sync_feed` |
 | `POST /api/backfill?limit=50` | Same as `douyin_backfill_play_urls` |
 | `GET /api/youtube/status` | Same as `youtube_login_status`/poll — `{logged_in, in_progress}` |
@@ -192,7 +331,7 @@ Player (open):
 - `Space` — pause/resume
 - `↑`/`↓` — volume ±10%, clamped [0%, 100%]
 - `←`/`→` — seek ±5s
-- `f` — toggle fullscreen (just the video/iframe, not the whole player card)
+- `f` — toggle fullscreen (player, timeline and rating controls)
 - `Escape` / click outside / ✕ — close
 
 Playback defaults to 1.75x speed (`DEFAULT_PLAYBACK_RATE` in `ui.html`) —
@@ -514,16 +653,11 @@ cards that appear (title, channel, video id, thumbnail, relative time text).
   card doesn't reliably expose a per-channel avatar image the way Douyin's
   follow sidebar does, so YouTube creator rows just have no avatar (the UI
   hides the broken-image icon via `onerror`).
-- **YouTube sometimes blocks the embed with a "Sign in to confirm you're not
-  a bot" interstitial** instead of serving the real player — a plain HTML
-  page inside the cross-origin iframe, invisible to our JS and silent (no
-  `error` event). `ui.html`'s `openPlayer`/retry paths arm a 9s timer
-  (`armYtFallbackTimer`) that shows the existing playback-fallback UI unless
-  a postMessage arrives from the iframe first (the real player starts
-  broadcasting almost immediately; the interstitial never does). This can't
-  be fixed server-side — it's YouTube's own bot detection on the viewer's
-  IP — so the fallback just gives a clear message plus Retry / "Open on
-  YouTube" instead of a silently stuck player.
+- **YouTube iframe silence is not evidence of bot blocking.** Playback may
+  work while no state messages arrive. `armYtFallbackTimer` only adds a
+  source-link hint after nine seconds; it must never hide, reload or replace
+  the iframe. Explicit player errors may show the fallback. The regression
+  checks in `tests/playback.test.cjs` cover silence and explicit errors.
 
 ## Rules of thumb
 
